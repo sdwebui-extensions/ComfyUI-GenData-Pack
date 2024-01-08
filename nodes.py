@@ -29,195 +29,195 @@ BAKED_VAE = 'Baked VAE'
 #! SYSTEM HOOKS
 
 
-class cstr(str):
-    class color:
-        END = '\33[0m'
-        BOLD = '\33[1m'
-        ITALIC = '\33[3m'
-        UNDERLINE = '\33[4m'
-        BLINK = '\33[5m'
-        BLINK2 = '\33[6m'
-        SELECTED = '\33[7m'
+# class cstr(str):
+#     class color:
+#         END = '\33[0m'
+#         BOLD = '\33[1m'
+#         ITALIC = '\33[3m'
+#         UNDERLINE = '\33[4m'
+#         BLINK = '\33[5m'
+#         BLINK2 = '\33[6m'
+#         SELECTED = '\33[7m'
 
-        BLACK = '\33[30m'
-        RED = '\33[31m'
-        GREEN = '\33[32m'
-        YELLOW = '\33[33m'
-        BLUE = '\33[34m'
-        VIOLET = '\33[35m'
-        BEIGE = '\33[36m'
-        WHITE = '\33[37m'
+#         BLACK = '\33[30m'
+#         RED = '\33[31m'
+#         GREEN = '\33[32m'
+#         YELLOW = '\33[33m'
+#         BLUE = '\33[34m'
+#         VIOLET = '\33[35m'
+#         BEIGE = '\33[36m'
+#         WHITE = '\33[37m'
 
-        BLACKBG = '\33[40m'
-        REDBG = '\33[41m'
-        GREENBG = '\33[42m'
-        YELLOWBG = '\33[43m'
-        BLUEBG = '\33[44m'
-        VIOLETBG = '\33[45m'
-        BEIGEBG = '\33[46m'
-        WHITEBG = '\33[47m'
+#         BLACKBG = '\33[40m'
+#         REDBG = '\33[41m'
+#         GREENBG = '\33[42m'
+#         YELLOWBG = '\33[43m'
+#         BLUEBG = '\33[44m'
+#         VIOLETBG = '\33[45m'
+#         BEIGEBG = '\33[46m'
+#         WHITEBG = '\33[47m'
 
-        GREY = '\33[90m'
-        LIGHTRED = '\33[91m'
-        LIGHTGREEN = '\33[92m'
-        LIGHTYELLOW = '\33[93m'
-        LIGHTBLUE = '\33[94m'
-        LIGHTVIOLET = '\33[95m'
-        LIGHTBEIGE = '\33[96m'
-        LIGHTWHITE = '\33[97m'
+#         GREY = '\33[90m'
+#         LIGHTRED = '\33[91m'
+#         LIGHTGREEN = '\33[92m'
+#         LIGHTYELLOW = '\33[93m'
+#         LIGHTBLUE = '\33[94m'
+#         LIGHTVIOLET = '\33[95m'
+#         LIGHTBEIGE = '\33[96m'
+#         LIGHTWHITE = '\33[97m'
 
-        GREYBG = '\33[100m'
-        LIGHTREDBG = '\33[101m'
-        LIGHTGREENBG = '\33[102m'
-        LIGHTYELLOWBG = '\33[103m'
-        LIGHTBLUEBG = '\33[104m'
-        LIGHTVIOLETBG = '\33[105m'
-        LIGHTBEIGEBG = '\33[106m'
-        LIGHTWHITEBG = '\33[107m'
+#         GREYBG = '\33[100m'
+#         LIGHTREDBG = '\33[101m'
+#         LIGHTGREENBG = '\33[102m'
+#         LIGHTYELLOWBG = '\33[103m'
+#         LIGHTBLUEBG = '\33[104m'
+#         LIGHTVIOLETBG = '\33[105m'
+#         LIGHTBEIGEBG = '\33[106m'
+#         LIGHTWHITEBG = '\33[107m'
 
-        @staticmethod
-        def add_code(name, code):
-            if not hasattr(cstr.color, name.upper()):
-                setattr(cstr.color, name.upper(), code)
-            else:
-                raise ValueError(
-                    f"'cstr' object already contains a code with the name '{name}'.")
+#         @staticmethod
+#         def add_code(name, code):
+#             if not hasattr(cstr.color, name.upper()):
+#                 setattr(cstr.color, name.upper(), code)
+#             else:
+#                 raise ValueError(
+#                     f"'cstr' object already contains a code with the name '{name}'.")
 
-    def __new__(cls, text):
-        return super().__new__(cls, text)
+#     def __new__(cls, text):
+#         return super().__new__(cls, text)
 
-    def __getattr__(self, attr):
-        if attr.lower().startswith("_cstr"):
-            code = getattr(self.color, attr.upper().lstrip("_cstr"))
-            modified_text = self.replace(f"__{attr[1:]}__", f"{code}")
-            return cstr(modified_text)
-        elif attr.upper() in dir(self.color):
-            code = getattr(self.color, attr.upper())
-            modified_text = f"{code}{self}{self.color.END}"
-            return cstr(modified_text)
-        elif attr.lower() in dir(cstr):
-            return getattr(cstr, attr.lower())
-        else:
-            raise AttributeError(f"'cstr' object has no attribute '{attr}'")
+#     def __getattr__(self, attr):
+#         if attr.lower().startswith("_cstr"):
+#             code = getattr(self.color, attr.upper().lstrip("_cstr"))
+#             modified_text = self.replace(f"__{attr[1:]}__", f"{code}")
+#             return cstr(modified_text)
+#         elif attr.upper() in dir(self.color):
+#             code = getattr(self.color, attr.upper())
+#             modified_text = f"{code}{self}{self.color.END}"
+#             return cstr(modified_text)
+#         elif attr.lower() in dir(cstr):
+#             return getattr(cstr, attr.lower())
+#         else:
+#             raise AttributeError(f"'cstr' object has no attribute '{attr}'")
 
-    def print(self, **kwargs):
-        print(self, **kwargs)
-
-
-#! MESSAGE TEMPLATES
-cstr.color.add_code(
-    "msg", f"{cstr.color.BLUE}Lux Nodes: {cstr.color.END}")
-cstr.color.add_code(
-    "warning", f"{cstr.color.BLUE}Lux Nodes {cstr.color.LIGHTYELLOW}Warning: {cstr.color.END}")
-cstr.color.add_code(
-    "error", f"{cstr.color.RED}Lux Nodes {cstr.color.END}Error: {cstr.color.END}")
-
-#! GLOBALS
-NODE_FILE = os.path.abspath(__file__)
-MODELS_DIR = folder_paths.models_dir
-LUX_NODES_ROOT = os.path.dirname(NODE_FILE)
-LUX_DATABASE = os.path.join(LUX_NODES_ROOT, 'lux_nodes_settings.json')
-
-# WAS SETTINGS MANAGER
+#     def print(self, **kwargs):
+#         print(self, **kwargs)
 
 
-class WASDatabase:
-    """
-    The WAS Suite Database Class provides a simple key-value database that stores
-    data in a flatfile using the JSON format. Each key-value pair is associated with
-    a category.
+# #! MESSAGE TEMPLATES
+# cstr.color.add_code(
+#     "msg", f"{cstr.color.BLUE}Lux Nodes: {cstr.color.END}")
+# cstr.color.add_code(
+#     "warning", f"{cstr.color.BLUE}Lux Nodes {cstr.color.LIGHTYELLOW}Warning: {cstr.color.END}")
+# cstr.color.add_code(
+#     "error", f"{cstr.color.RED}Lux Nodes {cstr.color.END}Error: {cstr.color.END}")
 
-    Attributes:
-        filepath (str): The path to the JSON file where the data is stored.
-        data (dict): The dictionary that holds the data read from the JSON file.
+# #! GLOBALS
+# NODE_FILE = os.path.abspath(__file__)
+# MODELS_DIR = folder_paths.models_dir
+# LUX_NODES_ROOT = os.path.dirname(NODE_FILE)
+# LUX_DATABASE = os.path.join(LUX_NODES_ROOT, 'lux_nodes_settings.json')
 
-    Methods:
-        insert(category, key, value): Inserts a key-value pair into the database
-            under the specified category.
-        get(category, key): Retrieves the value associated with the specified
-            key and category from the database.
-        update(category, key): Update a value associated with the specified
-            key and category from the database.
-        delete(category, key): Deletes the key-value pair associated with the
-            specified key and category from the database.
-        _save(): Saves the current state of the database to the JSON file.
-    """
-
-    def __init__(self, filepath):
-        self.filepath = filepath
-        try:
-            with open(filepath, 'r') as f:
-                self.data = json.load(f)
-        except FileNotFoundError:
-            self.data = {}
-
-    def catExists(self, category):
-        return category in self.data
-
-    def keyExists(self, category, key):
-        return category in self.data and key in self.data[category]
-
-    def insert(self, category, key, value):
-        if not isinstance(category, str) or not isinstance(key, str):
-            cstr("Category and key must be strings").error.print()
-            return
-
-        if category not in self.data:
-            self.data[category] = {}
-        self.data[category][key] = value
-        self._save()
-
-    def update(self, category, key, value):
-        if category in self.data and key in self.data[category]:
-            self.data[category][key] = value
-            self._save()
-
-    def updateCat(self, category, dictionary):
-        self.data[category].update(dictionary)
-        self._save()
-
-    def get(self, category, key):
-        return self.data.get(category, {}).get(key, None)
-
-    def getDB(self):
-        return self.data
-
-    def insertCat(self, category):
-        if not isinstance(category, str):
-            cstr("Category must be a string").error.print()
-            return
-
-        if category in self.data:
-            cstr(
-                f"The database category '{category}' already exists!").error.print()
-            return
-        self.data[category] = {}
-        self._save()
-
-    def getDict(self, category):
-        if category not in self.data:
-            cstr(
-                f"The database category '{category}' does not exist!").error.print()
-            return {}
-        return self.data[category]
-
-    def delete(self, category, key):
-        if category in self.data and key in self.data[category]:
-            del self.data[category][key]
-            self._save()
-
-    def _save(self):
-        try:
-            with open(self.filepath, 'w') as f:
-                json.dump(self.data, f, indent=4)
-        except FileNotFoundError:
-            cstr(f"Cannot save database to file '{self.filepath}'. "
-                 "Storing the data in the object instead. Does the folder and node file have write permissions?").warning.print()
-        except Exception as e:
-            cstr(f"Error while saving JSON data: {e}").error.print()
+# # WAS SETTINGS MANAGER
 
 
-WDB = WASDatabase(LUX_DATABASE)
+# class WASDatabase:
+#     """
+#     The WAS Suite Database Class provides a simple key-value database that stores
+#     data in a flatfile using the JSON format. Each key-value pair is associated with
+#     a category.
+
+#     Attributes:
+#         filepath (str): The path to the JSON file where the data is stored.
+#         data (dict): The dictionary that holds the data read from the JSON file.
+
+#     Methods:
+#         insert(category, key, value): Inserts a key-value pair into the database
+#             under the specified category.
+#         get(category, key): Retrieves the value associated with the specified
+#             key and category from the database.
+#         update(category, key): Update a value associated with the specified
+#             key and category from the database.
+#         delete(category, key): Deletes the key-value pair associated with the
+#             specified key and category from the database.
+#         _save(): Saves the current state of the database to the JSON file.
+#     """
+
+#     def __init__(self, filepath):
+#         self.filepath = filepath
+#         try:
+#             with open(filepath, 'r') as f:
+#                 self.data = json.load(f)
+#         except FileNotFoundError:
+#             self.data = {}
+
+#     def catExists(self, category):
+#         return category in self.data
+
+#     def keyExists(self, category, key):
+#         return category in self.data and key in self.data[category]
+
+#     def insert(self, category, key, value):
+#         if not isinstance(category, str) or not isinstance(key, str):
+#             cstr("Category and key must be strings").error.print()
+#             return
+
+#         if category not in self.data:
+#             self.data[category] = {}
+#         self.data[category][key] = value
+#         self._save()
+
+#     def update(self, category, key, value):
+#         if category in self.data and key in self.data[category]:
+#             self.data[category][key] = value
+#             self._save()
+
+#     def updateCat(self, category, dictionary):
+#         self.data[category].update(dictionary)
+#         self._save()
+
+#     def get(self, category, key):
+#         return self.data.get(category, {}).get(key, None)
+
+#     def getDB(self):
+#         return self.data
+
+#     def insertCat(self, category):
+#         if not isinstance(category, str):
+#             cstr("Category must be a string").error.print()
+#             return
+
+#         if category in self.data:
+#             cstr(
+#                 f"The database category '{category}' already exists!").error.print()
+#             return
+#         self.data[category] = {}
+#         self._save()
+
+#     def getDict(self, category):
+#         if category not in self.data:
+#             cstr(
+#                 f"The database category '{category}' does not exist!").error.print()
+#             return {}
+#         return self.data[category]
+
+#     def delete(self, category, key):
+#         if category in self.data and key in self.data[category]:
+#             del self.data[category][key]
+#             self._save()
+
+#     def _save(self):
+#         try:
+#             with open(self.filepath, 'w') as f:
+#                 json.dump(self.data, f, indent=4)
+#         except FileNotFoundError:
+#             cstr(f"Cannot save database to file '{self.filepath}'. "
+#                  "Storing the data in the object instead. Does the folder and node file have write permissions?").warning.print()
+#         except Exception as e:
+#             cstr(f"Error while saving JSON data: {e}").error.print()
+
+
+# WDB = WASDatabase(LUX_DATABASE)
 
 
 def parse_name(ckpt_name):
@@ -357,10 +357,7 @@ def parseSamplerScheduler(sampler_name, default_sampler, default_scheduler):
 
 def get_file_path_by_type(pathtype, filename, addDot=True, fullpath=True):
     if filename == '' or filename.strip() == '':
-        if pathtype == 'vae':
-            return BAKED_VAE
-
-        return filename
+        return BAKED_VAE if pathtype == 'vae' else filename
 
     filename = filename.strip()
 
@@ -641,8 +638,9 @@ class GenDataMulti:
                     for i in range(1, gendata_count + 1)]
 
         if gendata_stack is not None:
-            gendatas.extend([g for g in gendata_stack if g[0]
-                            != "" and g[0] != "None"])
+            gendatas.extend([g for g in gendata_stack
+                             if g[0] != "" and
+                             g[0] != "None"])
 
         return (gendatas,)
 
@@ -958,11 +956,11 @@ class CheckpointMultiSelectorSimpleWithImages():
         pass
 
     @classmethod
-    def INPUT_TYPES(cls):
+    def INPUT_TYPES(self):
         inputs = {
             "required": {
-                "input_mode": (cls.modes, {"default": "checkpoint only"}),
-                "ckpt_count": ("INT", {"default": 3, "min": 0, "max": 5, "step": 1}),
+                "input_mode": (self.modes, {"default": "checkpoint only"}),
+                "ckpt_count": ("INT", {"default": 3, "min": 0, "max": 50, "step": 1}),
             },
         }
 
@@ -970,15 +968,20 @@ class CheckpointMultiSelectorSimpleWithImages():
             "ckpt_stack": ("CKPT_STACK", {"forceInput": True}),
         }
 
+        checkpoints = folder_paths.get_filename_list("checkpoints")
+        vaes = [BAKED_VAE] + folder_paths.get_filename_list("vae")
+
+        names = (checkpoints, )[0]
+        populate_items(names, "checkpoints")
+
         for i in range(1, 50):
-            inputs["required"][f"ckpt_{i}"] = (
-                folder_paths.get_filename_list("checkpoints"), )
-            inputs["required"][f"vae_{i}"] = ([BAKED_VAE] +
-                                              folder_paths.get_filename_list("vae"), )
+            inputs["required"][f"ckpt_{i}"] = (checkpoints, )
+            inputs["required"][f"vae_{i}"] = (vaes, )
             inputs["required"][f"clipskip_{i}"] = (
                 "INT", {"default": 1, "min": 1, "max": 999, "step": 1}, )
-            names = inputs["required"][f"ckpt_{i}"][0]
-            populate_items(names, "checkpoints")
+            ckpt_names = inputs["required"][f"ckpt_{i}"][0]
+            for i, n in enumerate(names):
+                ckpt_names[i] = n
 
         return inputs
 
@@ -990,15 +993,17 @@ class CheckpointMultiSelectorSimpleWithImages():
     def select_checkpoints(self, input_mode, ckpt_count, ckpt_stack=None, **kwargs):
         stack = [
             {
-                "ckpt": kwargs.get(f"ckpt_{i}"),
+                "ckpt": kwargs.get(f"ckpt_{i}")["content"],
                 "vae": kwargs.get(f"vae_{i}"),
                 "clipskip": kwargs.get(f"clipskip_{i}"),
             } for i in range(1, ckpt_count + 1)
         ]
 
         if ckpt_stack is not None:
-            stack.extend([c for c in ckpt_stack if c["ckpt"] is not None and c["ckpt"]
-                         != "" and c["ckpt"] != "None"])
+            stack.extend([c for c in ckpt_stack
+                          if c["ckpt"] is not None and
+                          c["ckpt"] != "" and
+                          c["ckpt"] != "None"])
 
         return (stack, )
 
@@ -1247,8 +1252,10 @@ class LoadCheckpointsFromFile:
                     stack.append(stack_elem)
 
         if ckpt_stack is not None:
-            stack.extend([c for c in ckpt_stack if c["ckpt"] is not None and c["ckpt"]
-                          != "" and c["ckpt"] != "None"])
+            stack.extend([c for c in ckpt_stack
+                          if c["ckpt"] is not None and
+                          c["ckpt"] != "" and
+                          c["ckpt"] != "None"])
 
         return (stack, len(stack))
 
@@ -1274,14 +1281,14 @@ class ProductCheckpointGenData:
 
     CATEGORY = "utils"
 
-    def cross_product(self, ckpt_stack=[], prompts=[], index=0):
-        total_num = len(ckpt_stack) * len(prompts)
+    def cross_product(self, ckpt_stack=[], gendata_stack=[], index=0):
+        total_num = len(ckpt_stack) * len(gendata_stack)
 
-        cur_index = index[0] % total_num
-        ckpt_num = math.floor(cur_index / len(prompts))
-        prompt_num = cur_index % len(prompts)
+        cur_index = index % total_num
+        ckpt_num = math.floor(cur_index / len(gendata_stack))
+        prompt_num = cur_index % len(gendata_stack)
 
-        gd = GenData(prompts[prompt_num])
+        gd = GenData(gendata_stack[prompt_num])
         gd.bundle['ckpt_name'] = ckpt_stack[ckpt_num]['ckpt']
         gd.bundle['vae_name'] = ckpt_stack[ckpt_num]['vae']
         gd.bundle['clip_skip'] = ckpt_stack[ckpt_num]['clipskip']
@@ -1371,7 +1378,7 @@ NODE_CLASS_MAPPINGS = {
     "VAE From String 👩‍💻": VaeFromStr,
     "LoRA Stacker From Prompt 👩‍💻": LoraStackerFromPrompt,
     "LoRA Stack to String 👩‍💻": LoraStackToString,
-    "× Product Checkpoint & GenDatas 👩‍💻": ProductCheckpointGenData,
+    "× Product CheckpointXGenDatas 👩‍💻": ProductCheckpointGenData,
     "Checkpoint to String 👩‍💻": CheckpointToString,
     "VAE to String 👩‍💻": VaeToString,
 }

@@ -75,7 +75,8 @@ function handleWidgetsVisibility(node, widgetCount, maxCount, inputModeValue) {
 // Create a map of node titles to their respective widget handlers
 const nodeWidgetHandlers = {
     "Checkpoint Selector Stacker 👩‍💻": {
-        'ckpt_count': handleCheckpointSelectorStacker,
+        'ckpt_count': handleCheckpointSelectorStackerCount,
+        'input_mode': handleCheckpointSelectorStackerInputMode,
     },
     "GenData Stacker 👩‍💻": {
         'gendata_count': handleGenDataStacker,
@@ -86,9 +87,14 @@ function handleGenDataStacker(node, widget) {
     handleWidgetsVisibility(node, widget.value, 50);
 }
 
-function handleCheckpointSelectorStacker(node, widget) {
+function handleCheckpointSelectorStackerCount(node, widget) {
     const inputModeValue = findWidgetByName(node, "input_mode").value;
     handleWidgetsVisibility(node, widget.value, 50, inputModeValue);
+}
+
+function handleCheckpointSelectorStackerInputMode(node, widget) {
+    const ckpt_count = findWidgetByName(node, "ckpt_count").value;
+    handleWidgetsVisibility(node, ckpt_count, 50, widget.value);
 }
 
 // In the main function where widgetLogic is called
@@ -108,7 +114,7 @@ app.registerExtension({
             let link = document.createElement("link");
             link.rel = "stylesheet";
             link.type = "text/css";
-            link.href = "extensions/ComfyUI-Gen-Data-Tester/gendata.css";
+            link.href = "extensions/ComfyUI-GenData-Pack/gendata.css";
             document.head.appendChild(link);
         }, 100);
     },
