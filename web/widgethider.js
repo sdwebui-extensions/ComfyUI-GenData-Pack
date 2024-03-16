@@ -45,14 +45,15 @@ function toggleWidget(node, widget, show = false, suffix = "") {
 
 // New function to handle widget visibility based on input_mode
 function handleWidgetsVisibility(node, widgetCount, maxCount, inputModeValue) {
-    const allNames = [ "ckpt", "vae", "clipskip", "gendata" ];
+    const allNames = [ "ckpt", "vae", "clip_skip", "gendata" ];
     const nodeVisibilityMap = {
         "Checkpoint Selector Stacker 👩‍💻": {
             "checkpoint only": [ "ckpt" ],
             "checkpoint + vae": [ "ckpt", "vae" ],
-            "checkpoint + vae + clip skip": [ "ckpt", "vae", "clipskip" ],
+            "checkpoint + vae + clip skip": [ "ckpt", "vae", "clip_skip" ],
         },
         "GenData Stacker 👩‍💻": [ "gendata" ],
+        "Crop|IP|Inpaint 👩‍💻": [ 'image' ],
     };
 
     const inputModeVisibilityMap = nodeVisibilityMap[node.comfyClass];

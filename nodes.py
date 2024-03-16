@@ -1,3 +1,4 @@
+import torch.nn.functional as F
 import os
 import glob
 import re
@@ -7,14 +8,19 @@ import json
 import piexif
 import piexif.helper
 import comfy.sd
-from PIL import Image, ExifTags
+from PIL import Image, ImageOps, ExifTags
 from PIL.PngImagePlugin import PngInfo
 import numpy as np
 import folder_paths
-import comfy.sd
 import math
-from nodes import MAX_RESOLUTION
+from nodes import MAX_RESOLUTION, KSampler, VAEDecode, VAEEncode
 from pathlib import Path
+import random
+from comfy.cli_args import args
+import comfy.clip_vision
+import torch
+import torchvision
+from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
 
 MANIFEST = {
     "name": "Lux Nodes",
@@ -26,91 +32,88 @@ MANIFEST = {
 
 BAKED_VAE = 'Baked VAE'
 
-#! SYSTEM HOOKS
+
+class cstr(str):
+    class color:
+        END = '\33[0m'
+        BOLD = '\33[1m'
+        ITALIC = '\33[3m'
+        UNDERLINE = '\33[4m'
+        BLINK = '\33[5m'
+        BLINK2 = '\33[6m'
+        SELECTED = '\33[7m'
+
+        BLACK = '\33[30m'
+        RED = '\33[31m'
+        GREEN = '\33[32m'
+        YELLOW = '\33[33m'
+        BLUE = '\33[34m'
+        VIOLET = '\33[35m'
+        BEIGE = '\33[36m'
+        WHITE = '\33[37m'
+
+        BLACKBG = '\33[40m'
+        REDBG = '\33[41m'
+        GREENBG = '\33[42m'
+        YELLOWBG = '\33[43m'
+        BLUEBG = '\33[44m'
+        VIOLETBG = '\33[45m'
+        BEIGEBG = '\33[46m'
+        WHITEBG = '\33[47m'
+
+        GREY = '\33[90m'
+        LIGHTRED = '\33[91m'
+        LIGHTGREEN = '\33[92m'
+        LIGHTYELLOW = '\33[93m'
+        LIGHTBLUE = '\33[94m'
+        LIGHTVIOLET = '\33[95m'
+        LIGHTBEIGE = '\33[96m'
+        LIGHTWHITE = '\33[97m'
+
+        GREYBG = '\33[100m'
+        LIGHTREDBG = '\33[101m'
+        LIGHTGREENBG = '\33[102m'
+        LIGHTYELLOWBG = '\33[103m'
+        LIGHTBLUEBG = '\33[104m'
+        LIGHTVIOLETBG = '\33[105m'
+        LIGHTBEIGEBG = '\33[106m'
+        LIGHTWHITEBG = '\33[107m'
+
+        @staticmethod
+        def add_code(name, code):
+            if not hasattr(cstr.color, name.upper()):
+                setattr(cstr.color, name.upper(), code)
+            else:
+                raise ValueError(
+                    f"'cstr' object already contains a code with the name '{name}'.")
+
+    def __new__(cls, text):
+        return super().__new__(cls, text)
+
+    def __getattr__(self, attr):
+        if attr.lower().startswith("_cstr"):
+            code = getattr(self.color, attr.upper().lstrip("_cstr"))
+            modified_text = self.replace(f"__{attr[1:]}__", f"{code}")
+            return cstr(modified_text)
+        elif attr.upper() in dir(self.color):
+            code = getattr(self.color, attr.upper())
+            modified_text = f"{code}{self}{self.color.END}"
+            return cstr(modified_text)
+        elif attr.lower() in dir(cstr):
+            return getattr(cstr, attr.lower())
+        else:
+            raise AttributeError(f"'cstr' object has no attribute '{attr}'")
+
+    def print(self, **kwargs):
+        print(self, **kwargs)
 
 
-# class cstr(str):
-#     class color:
-#         END = '\33[0m'
-#         BOLD = '\33[1m'
-#         ITALIC = '\33[3m'
-#         UNDERLINE = '\33[4m'
-#         BLINK = '\33[5m'
-#         BLINK2 = '\33[6m'
-#         SELECTED = '\33[7m'
-
-#         BLACK = '\33[30m'
-#         RED = '\33[31m'
-#         GREEN = '\33[32m'
-#         YELLOW = '\33[33m'
-#         BLUE = '\33[34m'
-#         VIOLET = '\33[35m'
-#         BEIGE = '\33[36m'
-#         WHITE = '\33[37m'
-
-#         BLACKBG = '\33[40m'
-#         REDBG = '\33[41m'
-#         GREENBG = '\33[42m'
-#         YELLOWBG = '\33[43m'
-#         BLUEBG = '\33[44m'
-#         VIOLETBG = '\33[45m'
-#         BEIGEBG = '\33[46m'
-#         WHITEBG = '\33[47m'
-
-#         GREY = '\33[90m'
-#         LIGHTRED = '\33[91m'
-#         LIGHTGREEN = '\33[92m'
-#         LIGHTYELLOW = '\33[93m'
-#         LIGHTBLUE = '\33[94m'
-#         LIGHTVIOLET = '\33[95m'
-#         LIGHTBEIGE = '\33[96m'
-#         LIGHTWHITE = '\33[97m'
-
-#         GREYBG = '\33[100m'
-#         LIGHTREDBG = '\33[101m'
-#         LIGHTGREENBG = '\33[102m'
-#         LIGHTYELLOWBG = '\33[103m'
-#         LIGHTBLUEBG = '\33[104m'
-#         LIGHTVIOLETBG = '\33[105m'
-#         LIGHTBEIGEBG = '\33[106m'
-#         LIGHTWHITEBG = '\33[107m'
-
-#         @staticmethod
-#         def add_code(name, code):
-#             if not hasattr(cstr.color, name.upper()):
-#                 setattr(cstr.color, name.upper(), code)
-#             else:
-#                 raise ValueError(
-#                     f"'cstr' object already contains a code with the name '{name}'.")
-
-#     def __new__(cls, text):
-#         return super().__new__(cls, text)
-
-#     def __getattr__(self, attr):
-#         if attr.lower().startswith("_cstr"):
-#             code = getattr(self.color, attr.upper().lstrip("_cstr"))
-#             modified_text = self.replace(f"__{attr[1:]}__", f"{code}")
-#             return cstr(modified_text)
-#         elif attr.upper() in dir(self.color):
-#             code = getattr(self.color, attr.upper())
-#             modified_text = f"{code}{self}{self.color.END}"
-#             return cstr(modified_text)
-#         elif attr.lower() in dir(cstr):
-#             return getattr(cstr, attr.lower())
-#         else:
-#             raise AttributeError(f"'cstr' object has no attribute '{attr}'")
-
-#     def print(self, **kwargs):
-#         print(self, **kwargs)
-
-
-# #! MESSAGE TEMPLATES
-# cstr.color.add_code(
-#     "msg", f"{cstr.color.BLUE}Lux Nodes: {cstr.color.END}")
-# cstr.color.add_code(
-#     "warning", f"{cstr.color.BLUE}Lux Nodes {cstr.color.LIGHTYELLOW}Warning: {cstr.color.END}")
-# cstr.color.add_code(
-#     "error", f"{cstr.color.RED}Lux Nodes {cstr.color.END}Error: {cstr.color.END}")
+cstr.color.add_code(
+    "msg", f"{cstr.color.BLUE}Lux Nodes: {cstr.color.END}")
+cstr.color.add_code(
+    "warning", f"{cstr.color.BLUE}Lux Nodes {cstr.color.LIGHTYELLOW}Warning: {cstr.color.END}")
+cstr.color.add_code(
+    "error", f"{cstr.color.RED}Lux Nodes {cstr.color.END}Error: {cstr.color.END}")
 
 # #! GLOBALS
 # NODE_FILE = os.path.abspath(__file__)
@@ -219,6 +222,42 @@ BAKED_VAE = 'Baked VAE'
 
 # WDB = WASDatabase(LUX_DATABASE)
 
+sampler_equivalents = {
+    'DPM++ 2M Karras': 'dpmpp_2m',
+    'DPM++ SDE Karras': 'dpmpp_sde',
+    'DPM++ 2M SDE Exponential': 'dpmpp_2m_sde',
+    'DPM++ 2M SDE Karras': 'dpmpp_2m_sde',
+    'Euler a': 'euler_ancestral',
+    'Euler': 'euler',
+    'LMS': 'lms',
+    'Heun': 'heun',
+    'DPM2': 'dpm_2',
+    'DPM2 a': 'dpm_2_ancestral',
+    'DPM++ 2S a': 'dpmpp_2s_ancestral',
+    'DPM++ 2M': 'dpmpp_2m',
+    'DPM++ SDE': 'dpmpp_sde',
+    'DPM++ 2M SDE heun': 'heunpp2',
+    'DPM++ 2M SDE heun Karras': 'heunpp2',
+    'DPM++ 2M SDE heun exponential': 'heunpp2',
+    'DPM++ 2M SDE': 'dpmpp_2m_sde',
+    'DPM++ 3M SDE Karras': 'dpmpp_3m_sde',
+    'DPM++ 3M SDE Exponential': 'dpmpp_3m_sde',
+    'DPM++ 3M SDE': 'dpmpp_3m_sde',
+    'DPM fast': 'dpm_fast',
+    'DPM adaptive': 'dpm_adaptive',
+    'LMS Karras': 'lms',
+    'DPM2 Karras': 'dpm_2',
+    'DPM2 a Karras': 'dpm_2_ancestral',
+    'DPM++ 2S a Karras': 'dpm_2s_ancestral',
+    # 'Restart': '',
+    'DDIM': 'ddim',
+    # 'PLMS': '',
+    'UniPC': 'uni_pc',
+}
+
+sampler_equivalents_lower = {
+    str(key).lower(): value for key, value in sampler_equivalents.items()}
+
 
 def parse_name(ckpt_name):
     path = ckpt_name
@@ -276,11 +315,18 @@ def make_filename(filename, seed, ckpt_name, counter, time_format, extra, prompt
     return get_timestamp(time_format) if filename == "" else filename
 
 
+ckpt_item_cache = {}
+
+
 def populate_items(names, type):
     for idx, item_name in enumerate(names):
 
         file_name = os.path.splitext(item_name)[0]
-        file_path = folder_paths.get_full_path(type, item_name)
+        if item_name in ckpt_item_cache:
+            file_path = ckpt_item_cache[item_name]
+        else:
+            file_path = folder_paths.get_full_path(type, item_name)
+            ckpt_item_cache[item_name] = file_path
 
         if file_path is None:
             print(
@@ -306,48 +352,15 @@ def parseSamplerScheduler(sampler_name, default_sampler, default_scheduler):
     samp = ''
     sched = ''
 
-    if 'karras' in sampler_name:
+    if 'karras' in str(sampler_name).lower():
         sched = 'karras'
-    elif 'exponential' in sampler_name:
+    elif 'exponential' in str(sampler_name).lower():
         sched = 'exponential'
     else:
         sched = default_scheduler
 
-    sampler_equivalents = {
-        'dpm++ 2m karras': 'dpmpp_2m',
-        'dpm++ sde karras': 'dpmpp_sde',
-        'dpm++ 2m sde exponential': 'dpmpp_2m_sde',
-        'dpm++ 2m sde karras': 'dpmpp_2m_sde',
-        'euler a': 'euler_ancestral',
-        'euler': 'euler',
-        'lms': 'lms',
-        'heun': 'heun',
-        'dpm2': 'dpm_2',
-        'dpm2 a': 'dpm_2_ancestral',
-        'dpm++ 2s a': 'dpmpp_2s_ancestral',
-        'dpm++ 2m': 'dpmpp_2m',
-        'dpm++ sde': 'dpmpp_sde',
-        'dpm++ 2m sde': 'dpmpp_2m_sde',
-        'dpm++ 2m sde heun': 'heunpp2',  # are these the right equivalent?
-        'dpm++ 2m sde heun karras': 'heunpp2',
-        'dpm++ 2m sde heun exponential': 'heunpp2',
-        'dpm++ 3m sde': 'dpmpp_3m_sde',
-        'dpm++ 3m sde karras': 'dpmpp_3m_sde',
-        'dpm++ 3m sde exponential': 'dpmpp_3m_sde',
-        'dpm fast': 'dpm_fast',
-        'dpm adaptive': 'dpm_adaptive',
-        'lms karras': 'lms',
-        'dpm2 karras': 'dpm_2',
-        'dpm2 a karras': 'dpm_2_ancestral',
-        'dpm++ 2s a karras': 'dpm_2s_ancestral',
-        'restart': '',
-        'ddim': 'ddim',
-        'plms': '',
-        'unipc': 'uni_pc',
-    }
-
-    if sampler_name in sampler_equivalents:
-        samp = sampler_equivalents[sampler_name]
+    if str(sampler_name).lower() in sampler_equivalents_lower:
+        samp = sampler_equivalents_lower[str(sampler_name).lower()]
     else:
         samp = default_sampler
         sched = default_scheduler
@@ -355,8 +368,19 @@ def parseSamplerScheduler(sampler_name, default_sampler, default_scheduler):
     return [samp, sched, sampler_name]
 
 
+def matchOrigSampler(sampler_name, scheduler):
+    # inverting works here because even though there are
+    # duplicate keys, we intentionally set the 'right' one
+    # as the last one.  e.g. there are several keys with value
+    # 'dpmpp_3m_sde' but the last one equates to 'DPM++ 3M SDE',
+    # so we can add 'Karras' or 'Exponential' to it later
+    inv_sampler_equivalents = {value: key for key,
+                               value in sampler_equivalents.items()}
+    return f"{inv_sampler_equivalents[sampler_name]} {str(scheduler).title()}"
+
+
 def get_file_path_by_type(pathtype, filename, addDot=True, fullpath=True):
-    if filename == '' or filename.strip() == '':
+    if filename is None or filename == '' or filename.strip() == '' or filename == BAKED_VAE:
         return BAKED_VAE if pathtype == 'vae' else filename
 
     filename = filename.strip()
@@ -374,6 +398,16 @@ def get_file_path_by_type(pathtype, filename, addDot=True, fullpath=True):
 
     return path
 
+# Tensor to PIL
+
+
+def tensor2pil(image):
+    return Image.fromarray(np.clip(255. * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))
+
+
+def pil2tensor(image):
+    return torch.from_numpy(np.array(image).astype(np.float32) / 255.0).unsqueeze(0)
+
 
 class GenData:
     def __init__(self, prompt=None):
@@ -385,7 +419,8 @@ class GenData:
             "cfg": 7.0,
             "width": 512,
             "height": 512,
-            "clip_skip": -1,
+            "clip_skip": -1,  # Comfy style negative int
+            "clip_skip_in_prompt": False,
             "sampler_name": 'dpmpp_3m_sde',
             "orig_sampler_name": 'DPM++ 3M SDE Karras',
             "scheduler": 'karras',
@@ -430,7 +465,7 @@ class GenData:
                     self.bundle['positive'] = ",\n".join(
                         lines[:neg_index]).replace(',,', ',')
                     self.bundle['negative'] = ",\n".join(
-                        lines[neg_index:steps_index]).replace(',,', ',').replace('Negative prompt: ', '')
+                        lines[neg_index:steps_index]).replace(',,', ',').replace('Negative prompt:', '').strip()
                 else:
                     self.bundle['positive'] = ",\n".join(
                         lines[:steps_index]).replace(',,', ',')
@@ -447,7 +482,9 @@ class GenData:
                     self.bundle['cfg'] = float(gendict['cfg scale'])
                 if 'clip skip' in gendict:
                     # A1111 uses positive numbers
-                    self.bundle['clip_skip'] = 0 - int(gendict['clip skip'])
+                    self.bundle['clip_skip'] = 0 - \
+                        abs(int(gendict['clip skip']))
+                    self.bundle['clip_skip_in_prompt'] = True
                 if 'size' in gendict:
                     if 'x' in gendict['size']:
                         self.bundle['width'], self.bundle['height'] = [int(v)
@@ -462,7 +499,7 @@ class GenData:
                     self.bundle['height'] = int(gendict['height'])
                 if 'sampler' in gendict:
                     self.bundle['sampler_name'], self.bundle['scheduler'], self.bundle['orig_sampler_name'] = parseSamplerScheduler(
-                        gendict['sampler'], 'dpmpp_3m_sde', 'karras')
+                        gendict['sampler'], 'euler', 'normal')
                 if 'model' in gendict:
                     self.bundle['ckpt_name'] = get_file_path_by_type(
                         'checkpoints', gendict['model'], fullpath=False)
@@ -536,10 +573,11 @@ class GenData:
                 bundle_ckpt_name = ckpt_file
                 break
 
-        for vae_file in vae_files:
-            if Path(vae_file).name.startswith(vae_name) or vae_file.startswith(vae_name):
-                bundle_vae_name = vae_file
-                break
+        if vae_name != BAKED_VAE:
+            for vae_file in vae_files:
+                if Path(vae_file).name.startswith(vae_name) or vae_file.startswith(vae_name):
+                    bundle_vae_name = vae_file
+                    break
 
         self.bundle = {
             "positive": positive,
@@ -602,6 +640,8 @@ class ParseGenData:
 
     def parse_gendata(self, gendata, prompt=None, extra_pnginfo=None):
         gd = GenData(prompt=gendata)
+
+        # cstr(str(gd.decode_tuple(),)).msg.print()
 
         return (gd.decode_tuple(),)
 
@@ -701,7 +741,7 @@ class ImageSaveWithGendata:
         ckpt_txt = parse_simple_name(
             ckpt_txt_full) if strip_ckpt_name else parse_name(ckpt_txt_full)
 
-        vae_name = vae_name.strip() if vae_name.strip() != '' else BAKED_VAE
+        vae_name = vae_name.strip() if vae_name is not None and vae_name.strip() != '' else BAKED_VAE
         vae_txt = parse_simple_name(vae_name) if vae_name else ''
 
         vae_hash = ''
@@ -716,10 +756,15 @@ class ImageSaveWithGendata:
         if os.path.exists(ckpt_path):
             ckpt_hash = calculate_sha256(
                 ckpt_path)[:10] if include_ckpt_hash else '?'
+        else:
+            ckpt_hash = '??'
 
         if vae_path is not None and os.path.exists(vae_path):
             vae_hash = calculate_sha256(
                 vae_path)[:10] if include_ckpt_hash else '?'
+        else:
+            vae_hash = '??'
+
         comment = f"{handle_whitespace(positive)}\nNegative prompt: {handle_whitespace(negative)}\nSteps: {steps}, Sampler: {orig_sampler_name}, CFG Scale: {cfg}, Seed: {seed}, Size: {width}x{height}, Clip skip: {clip_skip}, Model hash: {ckpt_hash}, Model: {ckpt_txt}, VAE hash: {vae_hash}, VAE: {vae_txt}, Prompt name: {prompt_name}, Version: ComfyUI"
 
         output_path = os.path.join(self.output_dir, path)
@@ -786,10 +831,6 @@ class DecodeGendata:
             "required": {
                 "gendata_pipe": ("GENDATA_PIPE", ),
             },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO"
-            },
         }
 
     RETURN_TYPES = ("STRING", "STRING", "INT", "INT",
@@ -810,7 +851,7 @@ class DecodeGendata:
 
     CATEGORY = "utils"
 
-    def decode_bundle(self, gendata_pipe, prompt=None, extra_pnginfo=None):
+    def decode_bundle(self, gendata_pipe):
         positive, negative, seed, steps, cfg, width, height, clip_skip, sampler_name, orig_sampler_name, scheduler, ckpt_name, vae_name, prompt_name = gendata_pipe
 
         ckpt_path = get_file_path_by_type(
@@ -838,15 +879,13 @@ class EncodeGendata:
                 "height": ("INT", {"default": 512, "min": 16, "max": 10000, "forceInput": True}),
                 "clip_skip": ("INT", {"default": -1, "min": -10000, "max": -1, "forceInput": True}),
                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"forceInput": True}),
-                "orig_sampler_name": ("STRING", {"default": '', "multiline": False, "forceInput": True}),
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"forceInput": True}),
                 "ckpt_name": (folder_paths.get_filename_list("checkpoints"), {"forceInput": True}),
                 "vae_name": ([BAKED_VAE] + folder_paths.get_filename_list("vae"), {"forceInput": True}),
                 "prompt_name": ("STRING", {"default": '', "multiline": False, "forceInput": True}),
             },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO"
+            "optional": {
+                "orig_sampler_name": ("STRING", {"default": '', "multiline": False, "forceInput": True}),
             },
         }
 
@@ -856,11 +895,56 @@ class EncodeGendata:
 
     CATEGORY = "utils"
 
-    def encode_bundle(self, positive, negative, seed, steps, cfg, width, height, clip_skip, sampler_name, orig_sampler_name, scheduler, ckpt_name, vae_name, prompt_name, prompt=None, extra_pnginfo=None):
+    def encode_bundle(self, positive, negative, seed, steps, cfg, width, height, clip_skip, sampler_name, orig_sampler_name, scheduler, ckpt_name, vae_name, prompt_name):
         gendata = GenData()
         gendata.encode(positive, negative, seed, steps, cfg, width, height, clip_skip,
                        sampler_name, orig_sampler_name, scheduler, ckpt_name, vae_name, prompt_name)
         return (gendata.bundle, )
+
+
+class ProvideGendata:
+    def __init__(self):
+        self.last_bundle = {}
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "positive": ("STRING", {"default": '', "multiline": True, }),
+                "negative": ("STRING", {"default": '', "multiline": True, }),
+                "seed": ("INT", {"default": -1, "min": -1, "max": 0xffffffffffffffff, }),
+                "steps": ("INT", {"default": 20, "min": 1, "max": 10000, }),
+                "cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 100.0, }),
+                "width": ("INT", {"default": 512, "min": 16, "max": 10000, }),
+                "height": ("INT", {"default": 512, "min": 16, "max": 10000, }),
+                "clip_skip": ("INT", {"default": -1, "min": -10000, "max": -1, }),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, ),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
+                "vae_name": ([BAKED_VAE] + folder_paths.get_filename_list("vae"),),
+                "prompt_name": ("STRING", {"default": '', "multiline": False}),
+            },
+            "optional": {
+                "orig_sampler_name": ("STRING", {"default": '', "multiline": False}),
+            },
+        }
+
+    RETURN_TYPES = ("GENDATA_PIPE", )
+    RETURN_NAMES = ("gendata_pipe", )
+    FUNCTION = "encode_bundle"
+
+    CATEGORY = "utils"
+
+    def encode_bundle(self, positive, negative, seed, steps, cfg, width, height, clip_skip, sampler_name, scheduler, ckpt_name, vae_name, prompt_name, orig_sampler_name):
+        osampl = orig_sampler_name if orig_sampler_name != '' else matchOrigSampler(
+            str(sampler_name).replace('_gpu', ''), scheduler)
+        gendata = GenData()
+        gendata.encode(positive, negative, seed, steps, cfg, width, height, clip_skip,
+                       sampler_name, osampl, scheduler, ckpt_name, vae_name, prompt_name)
+
+        # cstr(str(gendata.decode_tuple(),)).msg.print()
+
+        return (gendata.decode_tuple(), )
 
 
 class LoadGenDataFromDir:
@@ -876,10 +960,6 @@ class LoadGenDataFromDir:
                 "recursive": ("BOOLEAN", {"default": False}),
                 "index": ("INT", {"default": 0, "min": 0, "max": 99999999})
             },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO"
-            },
         }
 
     RETURN_TYPES = ("GENDATA_STACK", "INT", "STRING",
@@ -890,7 +970,7 @@ class LoadGenDataFromDir:
 
     CATEGORY = "utils"
 
-    def load_prompts(self, dir_path, file_pattern='*', recursive=False, index=0, prompt=None, extra_pnginfo=None):
+    def load_prompts(self, dir_path, file_pattern='*', recursive=False, index=0):
         prompts = []
         file_list = []
         filepath = ''
@@ -921,17 +1001,13 @@ class LoadGenDataFromDir:
 
 class CheckpointSelectorSimpleWithImages():
     def __init__(self):
-        self.last_cp = ''
+        pass
 
     @classmethod
     def INPUT_TYPES(cls):
         types = {
             "required": {
                 "ckpt_name": (folder_paths.get_filename_list("checkpoints"), ),
-            },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO",
             },
         }
         names = types["required"]["ckpt_name"][0]
@@ -944,7 +1020,6 @@ class CheckpointSelectorSimpleWithImages():
     CATEGORY = "loaders"
 
     def select_checkpoint(self, **kwargs):
-        self.last_cp = str(kwargs["ckpt_name"]["content"])
         return (kwargs["ckpt_name"]["content"], kwargs["ckpt_name"]["content"])
 
 
@@ -977,7 +1052,7 @@ class CheckpointMultiSelectorSimpleWithImages():
         for i in range(1, 50):
             inputs["required"][f"ckpt_{i}"] = (checkpoints, )
             inputs["required"][f"vae_{i}"] = (vaes, )
-            inputs["required"][f"clipskip_{i}"] = (
+            inputs["required"][f"clip_skip_{i}"] = (
                 "INT", {"default": 1, "min": 1, "max": 999, "step": 1}, )
             ckpt_names = inputs["required"][f"ckpt_{i}"][0]
             for i, n in enumerate(names):
@@ -994,8 +1069,8 @@ class CheckpointMultiSelectorSimpleWithImages():
         stack = [
             {
                 "ckpt": kwargs.get(f"ckpt_{i}")["content"],
-                "vae": kwargs.get(f"vae_{i}"),
-                "clipskip": kwargs.get(f"clipskip_{i}"),
+                "vae": kwargs.get(f"vae_{i}") if input_mode in ["checkpoint + vae", "checkpoint + vae + clip skip"] else None,
+                "clip_skip": kwargs.get(f"clip_skip_{i}") if input_mode == "checkpoint + vae + clip skip" else None,
             } for i in range(1, ckpt_count + 1)
         ]
 
@@ -1004,6 +1079,14 @@ class CheckpointMultiSelectorSimpleWithImages():
                           if c["ckpt"] is not None and
                           c["ckpt"] != "" and
                           c["ckpt"] != "None"])
+
+        # for s in stack:
+            # cstr(f"s: {s}").msg.print()
+
+        # self.last_value = ",".join(
+        #     (f"{v['ckpt']},{v['vae']},{v['clip_skip']}" for v in stack))
+
+        # cstr(f"last_value: {self.last_value}").msg.print()
 
         return (stack, )
 
@@ -1018,10 +1101,6 @@ class CheckpointRerouter():
             "required": {
                 "ckpt_name": (folder_paths.get_filename_list("checkpoints"), {"forceInput": True}),
             },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO",
-            },
         }
 
     RETURN_TYPES = ("STRING", folder_paths.get_filename_list("checkpoints"), )
@@ -1029,7 +1108,7 @@ class CheckpointRerouter():
     FUNCTION = "reroute_checkpoint"
     CATEGORY = "utils"
 
-    def reroute_checkpoint(self, ckpt_name=None, prompt=None, extra_pnginfo=None):
+    def reroute_checkpoint(self, ckpt_name=None):
         self.last_cp = str(ckpt_name)
         return (str(ckpt_name), ckpt_name)
 
@@ -1044,10 +1123,6 @@ class CheckpointFromStr():
             "required": {
                 "ckpt_name": ("STRING", {"default": '', "multiline": False}),
             },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO",
-            },
         }
 
     RETURN_TYPES = (folder_paths.get_filename_list(
@@ -1056,7 +1131,7 @@ class CheckpointFromStr():
     FUNCTION = "checkpoint_from_str"
     CATEGORY = "loaders"
 
-    def checkpoint_from_str(self, ckpt_name=None, prompt=None, extra_pnginfo=None):
+    def checkpoint_from_str(self, ckpt_name=None):
         ckpt = ckpt_name
         ckpt_files = folder_paths.get_filename_list('checkpoints')
 
@@ -1078,10 +1153,6 @@ class VaeFromStr():
             "required": {
                 "vae_name": ("STRING", {"default": '', "multiline": False}),
             },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO",
-            },
         }
 
     RETURN_TYPES = ([BAKED_VAE] + folder_paths.get_filename_list(
@@ -1090,7 +1161,7 @@ class VaeFromStr():
     FUNCTION = "vae_from_str"
     CATEGORY = "loaders"
 
-    def vae_from_str(self, vae_name=None, prompt=None, extra_pnginfo=None):
+    def vae_from_str(self, vae_name=None):
         vae = vae_name
         vae_files = folder_paths.get_filename_list('vae')
 
@@ -1225,7 +1296,7 @@ class LoadCheckpointsFromFile:
                 stack_elem = {
                     "ckpt": None,
                     "vae": BAKED_VAE,
-                    "clipskip": 1,
+                    "clip_skip": 1,
                 }
                 if line is not None and line != '':
                     parts = re.split(f'[,;\t]', line)
@@ -1246,7 +1317,7 @@ class LoadCheckpointsFromFile:
                             stack_elem["vae"] = parts[1]
 
                     if len(parts) > 2 and parts[2].strip().replace('-', '').isdigit():
-                        stack_elem["clipskip"] = int(parts[2].strip())
+                        stack_elem["clip_skip"] = int(parts[2].strip())
 
                 if stack_elem["ckpt"] is not None:
                     stack.append(stack_elem)
@@ -1291,7 +1362,12 @@ class ProductCheckpointGenData:
         gd = GenData(gendata_stack[prompt_num])
         gd.bundle['ckpt_name'] = ckpt_stack[ckpt_num]['ckpt']
         gd.bundle['vae_name'] = ckpt_stack[ckpt_num]['vae']
-        gd.bundle['clip_skip'] = ckpt_stack[ckpt_num]['clipskip']
+
+        # but the checkpoint selector's clip_skip is only
+        # applied if there wasn't one defined in the prompt
+        if ckpt_stack[ckpt_num]['clip_skip'] is not None and gd.bundle['clip_skip_in_prompt'] is False:
+            gd.bundle['clip_skip'] = 0 - \
+                abs(int(ckpt_stack[ckpt_num]['clip_skip']))
 
         return (gd.decode_tuple(), cur_index, total_num, ckpt_num, prompt_num)
 
@@ -1306,10 +1382,6 @@ class CheckpointToString:
             "required": {
                 "ckpt_name": (folder_paths.get_filename_list("checkpoints"), {"forceInput": True}),
             },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO"
-            },
         }
 
     RETURN_TYPES = ("STRING", "STRING", "STRING")
@@ -1318,7 +1390,7 @@ class CheckpointToString:
 
     CATEGORY = "utils"
 
-    def ckpt_to_str(self, ckpt_name=None, prompt=None, extra_pnginfo=None):
+    def ckpt_to_str(self, ckpt_name=None):
         if ckpt_name is None:
             return ("", "", "")
 
@@ -1338,10 +1410,6 @@ class VaeToString:
             "required": {
                 "vae_name": ([BAKED_VAE] + folder_paths.get_filename_list("vae"), {"forceInput": True}),
             },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO"
-            },
         }
 
     RETURN_TYPES = ("STRING", "STRING", "STRING")
@@ -1350,7 +1418,7 @@ class VaeToString:
 
     CATEGORY = "utils"
 
-    def vae_to_str(self, vae_name=None, prompt=None, extra_pnginfo=None):
+    def vae_to_str(self, vae_name=None):
         if vae_name is None:
             return ("", "", "")
 
@@ -1363,8 +1431,292 @@ class VaeToString:
         return (vae_name, vae_full_path, vae_short_path)
 
 
+class CropIPInpaint:
+    def __init__(self):
+        self.last_image_path = ''
+        self.last_image = None
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        input_dir = folder_paths.get_input_directory()
+        files = [f for f in os.listdir(input_dir) if os.path.isfile(
+            os.path.join(input_dir, f))]
+        return {
+            "required": {
+                "images": ("IMAGE", ),
+                "model": ("MODEL", ),
+                "vae": ("VAE", ),
+                "clip": ("CLIP", ),
+                "text_positive": ("STRING", {"forceInput": True}),
+                "text_negative": ("STRING", {"forceInput": True}),
+                "output_final": ("BOOLEAN", {"default": False}),
+                "crop_w": ("INT", {"default": 512, "min": 0, "max": 9999999999, "step": 1}),
+                "crop_h": ("INT", {"default": 512, "min": 0, "max": 9999999999, "step": 1}),
+                "crop_x": ("INT", {"default": 0, "min": 0, "max": 9999999999, "step": 1}),
+                "crop_y": ("INT", {"default": 0, "min": 0, "max": 9999999999, "step": 1}),
+                "mask_blur_amount": ("INT", {"default": 32, "min": 0, "max": 128, "step": 1}),
+                "use_ip_adapter": ("BOOLEAN", {"default": True}),
+                "ip_weight": ("FLOAT", {"default": 1.0, "min": -1, "max": 3, "step": 0.05}),
+                "ip_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "ip_weight_type": (["original", "linear", "channel penalty"], ),
+                "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
+                "cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 100.0}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "overlay_blur_amount": ("INT", {"default": 32, "min": 0, "max": 128, "step": 1}),
+                "image": (sorted(files), ),
+                "seed": ("INT", {"default": 0, "min": -1125899906842624, "max": 1125899906842624}),
+            },
+            "optional": {
+                "opt_ipadapter": ("IPADAPTER", ),
+                "opt_clip_vision": ("CLIP_VISION",),
+                "opt_ip_image": ("IMAGE",),
+            },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    RETURN_TYPES = ("IMAGE", "IMAGE", "LATENT", "MASK")
+    RETURN_NAMES = ("image_final", "image_crop", "latent_final", "mask")
+    FUNCTION = "crop_ip_inpaint"
+
+    CATEGORY = "image"
+
+    def save_temp_images(self, images, filename_prefix="_temp_", prompt=None, extra_pnginfo=None):
+        temp_output_folder = folder_paths.get_temp_directory()
+        full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
+            filename_prefix, temp_output_folder, images[0].shape[1], images[0].shape[0])
+
+        results = list()
+        for image in images:
+            i = 255. * image.cpu().numpy()
+            img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
+            metadata = None
+            if not args.disable_metadata:
+                metadata = PngInfo()
+                if prompt is not None:
+                    metadata.add_text("prompt", json.dumps(prompt))
+                if extra_pnginfo is not None:
+                    for x in extra_pnginfo:
+                        metadata.add_text(x, json.dumps(extra_pnginfo[x]))
+
+            file = f"{filename}_{counter:05}_.png"
+            fullpath = os.path.join(full_output_folder, file)
+            img.save(fullpath, pnginfo=metadata, compress_level=1)
+            results.append({
+                "filename": file,
+                "subfolder": subfolder,
+                "type": "temp",
+                "fullpath": fullpath,
+            })
+            counter += 1
+
+        return results
+
+    def process_mask(self, image, width=64, height=64):
+        if image == '':
+            return torch.zeros((width, height), dtype=torch.float32, device="cpu")
+
+        image_path = folder_paths.get_annotated_filepath(image)
+        i = Image.open(image_path)
+        i = ImageOps.exif_transpose(i)
+        if i.getbands() != ("R", "G", "B", "A"):
+            i = i.convert("RGBA")
+        c = "A"
+        if c in i.getbands():
+            mask = np.array(i.getchannel(c)).astype(np.float32) / 255.0
+            mask = torch.from_numpy(mask)
+            if c == 'A':
+                mask = 1. - mask
+        else:
+            mask = torch.zeros(
+                (width, height), dtype=torch.float32, device="cpu")
+
+        return mask
+
+    def last_image_hash_has_changed(self, newimage):
+        m = hashlib.sha256()
+        n = hashlib.sha256()
+        with open(self.last_image_path, 'rb') as f:
+            m.update(f.read())
+        lasthash = m.digest().hex()
+        with open(newimage['fullpath'], 'rb') as f:
+            n.update(f.read())
+        newhash = n.digest().hex()
+
+        return lasthash == newhash, lasthash, newhash
+
+    def last_image_has_changed(self, newimage):
+        im1 = tensor2pil(newimage)
+        im2 = tensor2pil(self.last_image)
+        return im1.tobytes() != im2.tobytes()
+
+    def image_crop_location(self, image, top=0, left=0, width=256, height=256):
+        if width <= 0 or height <= 0 or top < 0 or left < 0:
+            raise ValueError(
+                "Invalid dimensions. Please check the values for top, left, width, and height.")
+
+        crops = list()
+        for i, img in enumerate(image):
+            pimg = tensor2pil(img)
+            img_width, img_height = pimg.size
+
+            crop_top = max(top, 0)
+            crop_left = max(left, 0)
+            crop_bottom = min(top + height, img_height)
+            crop_right = min(left + width, img_width)
+
+            # Crop the image and resize
+            crop = pimg.crop((crop_left, crop_top, crop_right, crop_bottom))
+            # initially try without this
+            # crop = crop.resize(
+            #     (((crop.size[0] // 8) * 8), ((crop.size[1] // 8) * 8)))
+
+            tcrop = pil2tensor(crop).squeeze()
+            crops.append(tcrop)
+
+        return crops
+
+    def crop_ip_inpaint(self,
+                        model=None,
+                        images=None,
+                        vae=None,
+                        clip=None,
+                        text_positive='',
+                        text_negative='',
+                        output_final=False,
+                        crop_w=0,
+                        crop_h=0,
+                        crop_x=0,
+                        crop_y=0,
+                        mask_blur_amount=0,
+                        use_ip_adapter=True,
+                        ip_weight=0.,
+                        ip_noise=0.,
+                        ip_weight_type='original',
+                        steps=20,
+                        cfg=7.,
+                        sampler_name='',
+                        scheduler='',
+                        denoise=0.,
+                        overlay_blur_amount=0,
+                        image='',
+                        seed=0,
+                        opt_ipadapter=None,
+                        opt_clip_vision=None,
+                        opt_ip_image=None,
+                        prompt=None,
+                        extra_pnginfo=None
+                        ):
+        image_results = self.save_temp_images(
+            images, prompt=prompt, extra_pnginfo=extra_pnginfo)
+
+        mask = None
+        if self.last_image is None:
+            # if image is new, invalidate the mask by setting path to ''
+            image = ''
+
+        clipspace_results = list()
+        if len(image_results) > 0:
+            img = tensor2pil(images[0])
+            if self.last_image is not None and image != '':
+                image_has_changed = self.last_image_has_changed(images[0])
+                if not image_has_changed and '[' in image and '/' in image:
+                    directory_filename, file_type = image.rsplit(' [', 1)
+                    directory, filename = directory_filename.rsplit('/', 1)
+                    file_type = file_type[:-1]  # remove trailing ']'
+
+                    clipspace_results.append({
+                        "filename": filename,
+                        "subfolder": directory,
+                        "type": file_type,
+                        "fullpath": image,
+                    })
+                else:
+                    # if image has changed, invalidate the mask by setting path to ''
+                    # or the the 'image' didn't appear to contain a clipspace input
+                    image = ''
+
+            self.last_image = images[0]
+            self.last_image_path = image_results[0]['fullpath']
+            mask = self.process_mask(image, img.width, img.height)
+
+            if image != '':
+                if mask_blur_amount > 0:
+                    ksize = mask_blur_amount * 3 if mask_blur_amount % 2 == 1 else mask_blur_amount * 3 + 1
+                    blur_transform = torchvision.transforms.GaussianBlur(
+                        (ksize, ksize), sigma=(mask_blur_amount, mask_blur_amount))
+                    mask = blur_transform(mask.unsqueeze(0))
+                else:
+                    mask = mask.unsqueeze(0)
+        else:
+            self.last_image = None
+
+        cropped_images = self.image_crop_location(
+            images, crop_y, crop_x, crop_w, crop_h)
+
+        return {
+            "ui":
+            {
+                "images": clipspace_results if len(clipspace_results) > 0 else image_results
+            },
+            "result": (images, cropped_images, None, mask)
+        }
+    # RETURN_NAMES = ("image_final", "image_crop", "latent_final", "mask")
+
+    @classmethod
+    def IS_CHANGED(self, images, vae, mask_blur_amount, image):
+        cstr(f"CropIPInpaint IS_CHANGED? {str(image)}").msg.print()
+        # if self.last_image is None:
+        #     return 0
+
+        image_path = folder_paths.get_annotated_filepath(image)
+        # self.last_image['fullpath'])
+        m = hashlib.sha256()
+        with open(image_path, 'rb') as f:
+            m.update(f.read())
+        return m.digest().hex()
+
+    @classmethod
+    def VALIDATE_INPUTS(self,
+                        model=None,
+                        images=None,
+                        vae=None,
+                        clip=None,
+                        text_positive='',
+                        text_negative='',
+                        output_final=False,
+                        crop_w=0,
+                        crop_h=0,
+                        crop_x=0,
+                        crop_y=0,
+                        mask_blur_amount=0,
+                        use_ip_adapter=True,
+                        ip_weight=0.,
+                        ip_noise=0.,
+                        ip_weight_type='original',
+                        steps=20,
+                        cfg=7.,
+                        sampler_name='',
+                        scheduler='',
+                        denoise=0.,
+                        overlay_blur_amount=0,
+                        image='',
+                        seed=0,
+                        opt_ipadapter=None,
+                        opt_clip_vision=None,
+                        opt_ip_image=None,
+                        prompt=None,
+                        extra_pnginfo=None):
+        if not folder_paths.exists_annotated_filepath(image):
+            return "Invalid image file: {}".format(image)
+
+        return True
+
+
 NODE_CLASS_MAPPINGS = {
     "Parse GenData 👩‍💻": ParseGenData,
+    "Provide GenData 👩‍💻": ProvideGendata,
     "Encode GenData 👩‍💻": EncodeGendata,
     "Decode GenData 👩‍💻": DecodeGendata,
     "Save Image From GenData 👩‍💻": ImageSaveWithGendata,
@@ -1381,4 +1733,5 @@ NODE_CLASS_MAPPINGS = {
     "× Product CheckpointXGenDatas 👩‍💻": ProductCheckpointGenData,
     "Checkpoint to String 👩‍💻": CheckpointToString,
     "VAE to String 👩‍💻": VaeToString,
+    "Crop|IP|Inpaint 👩‍💻": CropIPInpaint,
 }
