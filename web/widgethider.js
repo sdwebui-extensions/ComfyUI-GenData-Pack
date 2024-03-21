@@ -26,8 +26,6 @@ function toggleWidget(node, widget, show = false, suffix = "") {
     // special behavior for textareas -- before we update type
     if (widget.inputEl?.localName === 'textarea') {
         widget.inputEl.className = show ? 'comfy-multiline-input' : 'comfy-multiline-input comfy-multiline-input-hidden';
-        // widget.inputEl.style.display = show ? 'absolute' : 'none'; 
-        // console.log('set style.display to', widget.inputEl.style.display);
     }
     // Set the widget type and computeSize based on the show flag
     widget.type = show ? origProps[widget.name].origType : HIDDEN_TAG + suffix;
@@ -53,7 +51,8 @@ function handleWidgetsVisibility(node, widgetCount, maxCount, inputModeValue) {
             "checkpoint + vae + clip skip": [ "ckpt", "vae", "clip_skip" ],
         },
         "GenData Stacker 👩‍💻": [ "gendata" ],
-        "Crop|IP|Inpaint 👩‍💻": [ 'image' ],
+        // "Crop|IP|Inpaint 👩‍💻": [ 'image' ],
+        // "Crop|IP|Inpaint|SDXL 👩‍💻": [ 'image' ],
     };
 
     const inputModeVisibilityMap = nodeVisibilityMap[node.comfyClass];

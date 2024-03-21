@@ -23,7 +23,7 @@ import torchvision
 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
 
 MANIFEST = {
-    "name": "Lux Nodes",
+    "name": "GenData Pack",
     "version": (1, 0, 0),
     "author": "LuxFX",
     "project": "",
@@ -109,11 +109,11 @@ class cstr(str):
 
 
 cstr.color.add_code(
-    "msg", f"{cstr.color.BLUE}Lux Nodes: {cstr.color.END}")
+    "msg", f"{cstr.color.BLUE}[GenData Pack]: {cstr.color.END}")
 cstr.color.add_code(
-    "warning", f"{cstr.color.BLUE}Lux Nodes {cstr.color.LIGHTYELLOW}Warning: {cstr.color.END}")
+    "warning", f"{cstr.color.BLUE}[GenData Pack]: {cstr.color.LIGHTYELLOW}Warning: {cstr.color.END}")
 cstr.color.add_code(
-    "error", f"{cstr.color.RED}Lux Nodes {cstr.color.END}Error: {cstr.color.END}")
+    "error", f"{cstr.color.RED}[GenData Pack]: {cstr.color.END}Error: {cstr.color.END}")
 
 # #! GLOBALS
 # NODE_FILE = os.path.abspath(__file__)
@@ -1431,6 +1431,9 @@ class VaeToString:
         return (vae_name, vae_full_path, vae_short_path)
 
 
+CROPIPINPAINT_STAGES = ['Crop', 'Render', 'Final']
+
+
 class CropIPInpaint:
     def __init__(self):
         self.last_image_path = ''
@@ -1449,24 +1452,24 @@ class CropIPInpaint:
                 "clip": ("CLIP", ),
                 "text_positive": ("STRING", {"forceInput": True}),
                 "text_negative": ("STRING", {"forceInput": True}),
-                "output_final": ("BOOLEAN", {"default": False}),
+                "output_stage": (CROPIPINPAINT_STAGES, {"default": CROPIPINPAINT_STAGES[0]}),
                 "crop_w": ("INT", {"default": 512, "min": 0, "max": 9999999999, "step": 1}),
                 "crop_h": ("INT", {"default": 512, "min": 0, "max": 9999999999, "step": 1}),
-                "crop_x": ("INT", {"default": 0, "min": 0, "max": 9999999999, "step": 1}),
-                "crop_y": ("INT", {"default": 0, "min": 0, "max": 9999999999, "step": 1}),
+                "crop_x": ("INT", {"default": 160, "min": 0, "max": 9999999999, "step": 1}),
+                "crop_y": ("INT", {"default": 160, "min": 0, "max": 9999999999, "step": 1}),
                 "mask_blur_amount": ("INT", {"default": 32, "min": 0, "max": 128, "step": 1}),
                 "use_ip_adapter": ("BOOLEAN", {"default": True}),
-                "ip_weight": ("FLOAT", {"default": 1.0, "min": -1, "max": 3, "step": 0.05}),
-                "ip_noise": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "ip_weight": ("FLOAT", {"default": 0.25, "min": -1, "max": 3, "step": 0.05}),
+                "ip_noise": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "ip_weight_type": (["original", "linear", "channel penalty"], ),
-                "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
-                "cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 100.0}),
+                "steps": ("INT", {"default": 29, "min": 1, "max": 10000}),
+                "cfg": ("FLOAT", {"default": 7.7, "min": 0.0, "max": 100.0}),
                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
-                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "denoise": ("FLOAT", {"default": 0.91, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "overlay_blur_amount": ("INT", {"default": 32, "min": 0, "max": 128, "step": 1}),
-                "image": (sorted(files), ),
                 "seed": ("INT", {"default": 0, "min": -1125899906842624, "max": 1125899906842624}),
+                "image": (sorted(files), ),
             },
             "optional": {
                 "opt_ipadapter": ("IPADAPTER", ),
@@ -1476,13 +1479,37 @@ class CropIPInpaint:
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "LATENT", "MASK")
-    RETURN_NAMES = ("image_final", "image_crop", "latent_final", "mask")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "LATENT",
+                    "MASK", "LATENT")
+    RETURN_NAMES = ("image_final", "image_render", "image_crop",
+                    "latent_masked")
     FUNCTION = "crop_ip_inpaint"
 
     CATEGORY = "image"
 
-    def save_temp_images(self, images, filename_prefix="_temp_", prompt=None, extra_pnginfo=None):
+    @staticmethod
+    def set_latent_noise_mask(samples, mask):
+        s = samples.copy()
+        s["noise_mask"] = mask.reshape((-1, 1, mask.shape[-2], mask.shape[-1]))
+        return s
+
+    @staticmethod
+    def vae_encode(vae, pixels):
+        x = (pixels.shape[1] // 8) * 8
+        y = (pixels.shape[2] // 8) * 8
+        if pixels.shape[1] != x or pixels.shape[2] != y:
+            x_offset = (pixels.shape[1] % 8) // 2
+            y_offset = (pixels.shape[2] % 8) // 2
+            pixels = pixels[:, x_offset:x + x_offset, y_offset:y + y_offset, :]
+
+        return vae.encode(pixels[:, :, :, :3])
+
+    @staticmethod
+    def vae_decode(vae, samples):
+        return vae.decode(samples["samples"])
+
+    @staticmethod
+    def save_temp_images(images, filename_prefix="_temp_", prompt=None, extra_pnginfo=None):
         temp_output_folder = folder_paths.get_temp_directory()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix, temp_output_folder, images[0].shape[1], images[0].shape[0])
@@ -1513,7 +1540,8 @@ class CropIPInpaint:
 
         return results
 
-    def process_mask(self, image, width=64, height=64):
+    @staticmethod
+    def process_mask(image, width=64, height=64):
         if image == '':
             return torch.zeros((width, height), dtype=torch.float32, device="cpu")
 
@@ -1534,30 +1562,14 @@ class CropIPInpaint:
 
         return mask
 
-    def last_image_hash_has_changed(self, newimage):
-        m = hashlib.sha256()
-        n = hashlib.sha256()
-        with open(self.last_image_path, 'rb') as f:
-            m.update(f.read())
-        lasthash = m.digest().hex()
-        with open(newimage['fullpath'], 'rb') as f:
-            n.update(f.read())
-        newhash = n.digest().hex()
-
-        return lasthash == newhash, lasthash, newhash
-
-    def last_image_has_changed(self, newimage):
-        im1 = tensor2pil(newimage)
-        im2 = tensor2pil(self.last_image)
-        return im1.tobytes() != im2.tobytes()
-
-    def image_crop_location(self, image, top=0, left=0, width=256, height=256):
+    @staticmethod
+    def image_crop_location(image, top=0, left=0, width=256, height=256):
         if width <= 0 or height <= 0 or top < 0 or left < 0:
             raise ValueError(
                 "Invalid dimensions. Please check the values for top, left, width, and height.")
 
         crops = list()
-        for i, img in enumerate(image):
+        for img in image:
             pimg = tensor2pil(img)
             img_width, img_height = pimg.size
 
@@ -1577,6 +1589,23 @@ class CropIPInpaint:
 
         return crops
 
+    def last_image_hash_has_changed(self, newimage):
+        m = hashlib.sha256()
+        n = hashlib.sha256()
+        with open(self.last_image_path, 'rb') as f:
+            m.update(f.read())
+        lasthash = m.digest().hex()
+        with open(newimage['fullpath'], 'rb') as f:
+            n.update(f.read())
+        newhash = n.digest().hex()
+
+        return lasthash == newhash, lasthash, newhash
+
+    def last_image_has_changed(self, newimage):
+        im1 = tensor2pil(newimage)
+        im2 = tensor2pil(self.last_image)
+        return im1.tobytes() != im2.tobytes()
+
     def crop_ip_inpaint(self,
                         model=None,
                         images=None,
@@ -1584,7 +1613,7 @@ class CropIPInpaint:
                         clip=None,
                         text_positive='',
                         text_negative='',
-                        output_final=False,
+                        output_stage=False,
                         crop_w=0,
                         crop_h=0,
                         crop_x=0,
@@ -1608,8 +1637,11 @@ class CropIPInpaint:
                         prompt=None,
                         extra_pnginfo=None
                         ):
+        cropped_images = self.image_crop_location(
+            images, crop_y, crop_x, crop_w, crop_h)
+
         image_results = self.save_temp_images(
-            images, prompt=prompt, extra_pnginfo=extra_pnginfo)
+            cropped_images, prompt=prompt, extra_pnginfo=extra_pnginfo)
 
         mask = None
         if self.last_image is None:
@@ -1652,17 +1684,59 @@ class CropIPInpaint:
         else:
             self.last_image = None
 
-        cropped_images = self.image_crop_location(
-            images, crop_y, crop_x, crop_w, crop_h)
+        conditioning_positive = CLIPTextEncodeSDXL().encode(
+            clip=clip,
+            width=crop_w,
+            height=crop_h,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            target_width=crop_w,
+            target_height=crop_h,
+            text_g=text_positive,
+            text_l=text_positive,
+        )
+        conditioning_negative = CLIPTextEncodeSDXL().encode(
+            clip=clip,
+            width=crop_w,
+            height=crop_h,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            target_width=crop_w,
+            target_height=crop_h,
+            text_g=text_negative,
+            text_l=text_negative,
+        )
+
+        latent_t = self.vae_encode(vae, torch.stack(cropped_images, dim=0))
+        latent = {"samples": latent_t}
+        latent_masked = self.set_latent_noise_mask(
+            latent, mask) if mask is not None else latent.copy()
+
+        latent_masked_samples = latent_masked["samples"]
+        latent_masked_noise_mask = latent_masked["noise_mask"]
+
+        samples = latent
+
+        if denoise > 0 and image != '' and mask is not None:
+            samples = KSampler().sample(model, seed, steps, cfg, sampler_name, scheduler, positive=conditioning_positive[0],
+                                        negative=conditioning_negative[0], latent_image=latent_masked, denoise=denoise)
+            # samples = {"samples": torch.cat(
+            #     (ksamples[0]["samples"], latent_t), dim=0)}
+
+        gen_images = self.vae_decode(vae, latent)
 
         return {
             "ui":
             {
                 "images": clipspace_results if len(clipspace_results) > 0 else image_results
             },
-            "result": (images, cropped_images, None, mask)
+            "result": (
+                images if output_stage == 'Final' else None,
+                gen_images if output_stage != 'Crop' else None,
+                cropped_images,
+                samples
+            )
         }
-    # RETURN_NAMES = ("image_final", "image_crop", "latent_final", "mask")
 
     @classmethod
     def IS_CHANGED(self, images, vae, mask_blur_amount, image):
@@ -1685,7 +1759,7 @@ class CropIPInpaint:
                         clip=None,
                         text_positive='',
                         text_negative='',
-                        output_final=False,
+                        output_stage=False,
                         crop_w=0,
                         crop_h=0,
                         crop_x=0,
@@ -1733,5 +1807,6 @@ NODE_CLASS_MAPPINGS = {
     "× Product CheckpointXGenDatas 👩‍💻": ProductCheckpointGenData,
     "Checkpoint to String 👩‍💻": CheckpointToString,
     "VAE to String 👩‍💻": VaeToString,
-    "Crop|IP|Inpaint 👩‍💻": CropIPInpaint,
+    # "Crop|IP|Inpaint 👩‍💻": CropIPInpaint,
+    "Crop|IP|Inpaint|SDXL 👩‍💻": CropIPInpaint,
 }
