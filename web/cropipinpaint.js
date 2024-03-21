@@ -239,6 +239,18 @@ class CropIpInpaint {
             this.node.setSize([this.node.size[0], newHeight]);
         }
     };
+    toggleOutputTarget(output_name, isNormal = () => true) {
+        const outp = this.findOutput(output_name);
+        if ((outp?.links || []).length > 0) {
+            const graph = app.graph;
+            outp.links.forEach(k => {
+                const graphlink = graph.links[k];
+                const targetnode = graph._nodes_by_id[graphlink.target_id];
+
+                targetnode.mode = isNormal() ? MODE_NORMAL : MODE_MUTED;
+            });
+        }
+    };
     handleVisibility() {
         // hide image name
         this.setWidgetVisibility(this.findWidget("image"), false, false);
@@ -256,27 +268,31 @@ class CropIpInpaint {
             }
         });
 
-        const image_final = this.findOutput('image_final');
-        if ((image_final?.links || []).length > 0) {
-            const graph = app.graph;
-            image_final.links.forEach(k => {
-                const graphlink = graph.links[k];
-                const targetnode = graph._nodes_by_id[graphlink.target_id];
+        this.toggleOutputTarget('image_final', () => stage === 'Final');
+        this.toggleOutputTarget('image_render', () => stage === 'Final' || stage === 'Render');
+        this.toggleOutputTarget('latent_render', () => stage === 'Final' || stage === 'Render');
 
-                targetnode.mode = stage === "Final" ? MODE_NORMAL : MODE_MUTED;
-            });
-        }
+        // const image_final = this.findOutput('image_final');
+        // if ((image_final?.links || []).length > 0) {
+        //     const graph = app.graph;
+        //     image_final.links.forEach(k => {
+        //         const graphlink = graph.links[k];
+        //         const targetnode = graph._nodes_by_id[graphlink.target_id];
 
-        const image_render = this.findOutput('image_render');
-        if ((image_render?.links || []).length > 0) {
-            const graph = app.graph;
-            image_render.links.forEach(k => {
-                const graphlink = graph.links[k];
-                const targetnode = graph._nodes_by_id[graphlink.target_id];
+        //         targetnode.mode = stage === "Final" ? MODE_NORMAL : MODE_MUTED;
+        //     });
+        // }
 
-                targetnode.mode = stage === "Final" || stage === "Render" ? MODE_NORMAL : MODE_MUTED;
-            });
-        }
+        // const image_render = this.findOutput('image_render');
+        // if ((image_render?.links || []).length > 0) {
+        //     const graph = app.graph;
+        //     image_render.links.forEach(k => {
+        //         const graphlink = graph.links[k];
+        //         const targetnode = graph._nodes_by_id[graphlink.target_id];
+
+        //         targetnode.mode = stage === "Final" || stage === "Render" ? MODE_NORMAL : MODE_MUTED;
+        //     });
+        // }
         app.graph.setDirtyCanvas(true, false); // fg, bg
     };
 }

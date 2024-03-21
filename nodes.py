@@ -1479,10 +1479,9 @@ class CropIPInpaint:
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "LATENT",
-                    "MASK", "LATENT")
-    RETURN_NAMES = ("image_final", "image_render", "image_crop",
-                    "latent_masked")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "LATENT")
+    RETURN_NAMES = ("image_final", "image_render",
+                    "image_crop", "latent_render")
     FUNCTION = "crop_ip_inpaint"
 
     CATEGORY = "image"
@@ -1637,6 +1636,10 @@ class CropIPInpaint:
                         prompt=None,
                         extra_pnginfo=None
                         ):
+        rendered_images = None
+        cropped_images = None
+        samples = None
+
         cropped_images = self.image_crop_location(
             images, crop_y, crop_x, crop_w, crop_h)
 
@@ -1684,46 +1687,47 @@ class CropIPInpaint:
         else:
             self.last_image = None
 
-        conditioning_positive = CLIPTextEncodeSDXL().encode(
-            clip=clip,
-            width=crop_w,
-            height=crop_h,
-            crop_w=crop_w,
-            crop_h=crop_h,
-            target_width=crop_w,
-            target_height=crop_h,
-            text_g=text_positive,
-            text_l=text_positive,
-        )
-        conditioning_negative = CLIPTextEncodeSDXL().encode(
-            clip=clip,
-            width=crop_w,
-            height=crop_h,
-            crop_w=crop_w,
-            crop_h=crop_h,
-            target_width=crop_w,
-            target_height=crop_h,
-            text_g=text_negative,
-            text_l=text_negative,
-        )
+        if output_stage != 'Crop':
+            conditioning_positive = CLIPTextEncodeSDXL().encode(
+                clip=clip,
+                width=crop_w,
+                height=crop_h,
+                crop_w=crop_w,
+                crop_h=crop_h,
+                target_width=crop_w,
+                target_height=crop_h,
+                text_g=text_positive,
+                text_l=text_positive,
+            )
+            conditioning_negative = CLIPTextEncodeSDXL().encode(
+                clip=clip,
+                width=crop_w,
+                height=crop_h,
+                crop_w=crop_w,
+                crop_h=crop_h,
+                target_width=crop_w,
+                target_height=crop_h,
+                text_g=text_negative,
+                text_l=text_negative,
+            )
 
-        latent_t = self.vae_encode(vae, torch.stack(cropped_images, dim=0))
-        latent = {"samples": latent_t}
-        latent_masked = self.set_latent_noise_mask(
-            latent, mask) if mask is not None else latent.copy()
+            latent_t = self.vae_encode(vae, torch.stack(cropped_images, dim=0))
+            latent = {"samples": latent_t}
+            latent_masked = self.set_latent_noise_mask(
+                latent, mask) if mask is not None else latent.copy()
 
-        latent_masked_samples = latent_masked["samples"]
-        latent_masked_noise_mask = latent_masked["noise_mask"]
+            latent_masked_samples = latent_masked["samples"]
+            latent_masked_noise_mask = latent_masked["noise_mask"]
 
-        samples = latent
+            samples = latent
 
-        if denoise > 0 and image != '' and mask is not None:
-            samples = KSampler().sample(model, seed, steps, cfg, sampler_name, scheduler, positive=conditioning_positive[0],
-                                        negative=conditioning_negative[0], latent_image=latent_masked, denoise=denoise)
-            # samples = {"samples": torch.cat(
-            #     (ksamples[0]["samples"], latent_t), dim=0)}
+            if denoise > 0 and image != '' and mask is not None:
+                samples = KSampler().sample(model, seed, steps, cfg, sampler_name, scheduler, positive=conditioning_positive[0],
+                                            negative=conditioning_negative[0], latent_image=latent_masked, denoise=denoise)
+                # samples = {"samples": torch.cat(
+                #     (ksamples[0]["samples"], latent_t), dim=0)}
 
-        gen_images = self.vae_decode(vae, latent)
+            rendered_images = vae.decode(samples[0]["samples"])
 
         return {
             "ui":
@@ -1732,9 +1736,9 @@ class CropIPInpaint:
             },
             "result": (
                 images if output_stage == 'Final' else None,
-                gen_images if output_stage != 'Crop' else None,
+                rendered_images if output_stage != 'Crop' else None,
                 cropped_images,
-                samples
+                samples[0] if output_stage != 'Crop' else None,
             )
         }
 
