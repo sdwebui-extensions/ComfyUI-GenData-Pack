@@ -1436,8 +1436,10 @@ CROPIPINPAINT_STAGES = ['Crop', 'Render', 'Final']
 
 class CropIPInpaint:
     def __init__(self):
-        self.last_image_path = ''
-        self.last_image = None
+        self.last_mask_path = ''
+        self.last_crop = None
+        self.last_images = None
+        self.invalid_mask_paths = []
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1600,10 +1602,10 @@ class CropIPInpaint:
 
         return lasthash == newhash, lasthash, newhash
 
-    def last_image_has_changed(self, newimage):
-        im1 = tensor2pil(newimage)
-        im2 = tensor2pil(self.last_image)
-        return im1.tobytes() != im2.tobytes()
+    # def last_image_has_changed(self, newimage):
+    #     im1 = tensor2pil(newimage)
+    #     im2 = tensor2pil(self.last_image)
+    #     return im1.tobytes() != im2.tobytes()
 
     def crop_ip_inpaint(self,
                         model=None,
@@ -1640,23 +1642,37 @@ class CropIPInpaint:
         cropped_images = None
         samples = None
 
+        images_has_changed = True if self.last_images is None else not torch.equal(
+            images, self.last_images)
+        newcrop = (crop_y, crop_x, crop_w, crop_h)
+        crop_has_changed = newcrop != self.last_crop
+
+        # cstr(f"has images changed? {images_has_changed}").msg.print()
+        # cstr(
+        #     f"has crop changed? {crop_has_changed} -- old {str(self.last_crop)} -- new{str(newcrop)}").msg.print()
+
+        self.last_images = images
+        self.last_crop = newcrop
+
         cropped_images = self.image_crop_location(
             images, crop_y, crop_x, crop_w, crop_h)
 
-        image_results = self.save_temp_images(
+        crop_save = self.save_temp_images(
             cropped_images, prompt=prompt, extra_pnginfo=extra_pnginfo)
 
         mask = None
-        if self.last_image is None:
+        if images_has_changed or crop_has_changed:
             # if image is new, invalidate the mask by setting path to ''
+            # and recording the existing mask path as invalid
+            if image != '':
+                self.invalid_mask_paths.append(image)
             image = ''
 
         clipspace_results = list()
-        if len(image_results) > 0:
-            img = tensor2pil(images[0])
-            if self.last_image is not None and image != '':
-                image_has_changed = self.last_image_has_changed(images[0])
-                if not image_has_changed and '[' in image and '/' in image:
+        if len(crop_save) > 0:
+            if self.last_images is not None and image != '':
+                # look for clipspace path indicators
+                if not images_has_changed and '[' in image and '/' in image:
                     directory_filename, file_type = image.rsplit(' [', 1)
                     directory, filename = directory_filename.rsplit('/', 1)
                     file_type = file_type[:-1]  # remove trailing ']'
@@ -1672,9 +1688,8 @@ class CropIPInpaint:
                     # or the the 'image' didn't appear to contain a clipspace input
                     image = ''
 
-            self.last_image = images[0]
-            self.last_image_path = image_results[0]['fullpath']
-            mask = self.process_mask(image, img.width, img.height)
+            self.last_mask_path = crop_save[0]['fullpath']
+            mask = self.process_mask(image, images.shape[1], images.shape[2])
 
             if image != '':
                 if mask_blur_amount > 0:
@@ -1684,8 +1699,8 @@ class CropIPInpaint:
                     mask = blur_transform(mask.unsqueeze(0))
                 else:
                     mask = mask.unsqueeze(0)
-        else:
-            self.last_image = None
+        # else:
+        #     self.last_image = None
 
         if output_stage != 'Crop':
             conditioning_positive = CLIPTextEncodeSDXL().encode(
@@ -1716,9 +1731,6 @@ class CropIPInpaint:
             latent_masked = self.set_latent_noise_mask(
                 latent, mask) if mask is not None else latent.copy()
 
-            latent_masked_samples = latent_masked["samples"]
-            latent_masked_noise_mask = latent_masked["noise_mask"]
-
             samples = latent
 
             if denoise > 0 and image != '' and mask is not None:
@@ -1727,23 +1739,54 @@ class CropIPInpaint:
                 # samples = {"samples": torch.cat(
                 #     (ksamples[0]["samples"], latent_t), dim=0)}
 
-            rendered_images = vae.decode(samples[0]["samples"])
+            samples_to_use = samples["samples"] if isinstance(
+                samples, dict) else samples[0]["samples"]
+            rendered_images = vae.decode(samples_to_use)
 
         return {
             "ui":
             {
-                "images": clipspace_results if len(clipspace_results) > 0 else image_results
+                "images": clipspace_results if len(clipspace_results) > 0 else crop_save
             },
             "result": (
                 images if output_stage == 'Final' else None,
                 rendered_images if output_stage != 'Crop' else None,
                 cropped_images,
-                samples[0] if output_stage != 'Crop' else None,
+                samples_to_use if output_stage != 'Crop' else None,
             )
         }
 
     @classmethod
-    def IS_CHANGED(self, images, vae, mask_blur_amount, image):
+    def IS_CHANGED(self,
+                   model=None,
+                   images=None,
+                   vae=None,
+                   clip=None,
+                   text_positive='',
+                   text_negative='',
+                   output_stage=False,
+                   crop_w=0,
+                   crop_h=0,
+                   crop_x=0,
+                   crop_y=0,
+                   mask_blur_amount=0,
+                   use_ip_adapter=True,
+                   ip_weight=0.,
+                   ip_noise=0.,
+                   ip_weight_type='original',
+                   steps=20,
+                   cfg=7.,
+                   sampler_name='',
+                   scheduler='',
+                   denoise=0.,
+                   overlay_blur_amount=0,
+                   image='',
+                   seed=0,
+                   opt_ipadapter=None,
+                   opt_clip_vision=None,
+                   opt_ip_image=None,
+                   prompt=None,
+                   extra_pnginfo=None):
         cstr(f"CropIPInpaint IS_CHANGED? {str(image)}").msg.print()
         # if self.last_image is None:
         #     return 0
