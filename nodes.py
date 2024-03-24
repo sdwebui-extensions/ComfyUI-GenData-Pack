@@ -8,7 +8,7 @@ import json
 import piexif
 import piexif.helper
 import comfy.sd
-from PIL import Image, ImageOps, ExifTags
+from PIL import Image, ImageOps, ImageDraw, ImageFilter, ExifTags
 from PIL.PngImagePlugin import PngInfo
 import numpy as np
 import folder_paths
@@ -21,6 +21,7 @@ import comfy.clip_vision
 import torch
 import torchvision
 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
+from .IPAdapterPlus import IPAdapterApply
 
 MANIFEST = {
     "name": "GenData Pack",
@@ -1602,10 +1603,10 @@ class CropIPInpaint:
 
         return lasthash == newhash, lasthash, newhash
 
-    # def last_image_has_changed(self, newimage):
-    #     im1 = tensor2pil(newimage)
-    #     im2 = tensor2pil(self.last_image)
-    #     return im1.tobytes() != im2.tobytes()
+    def last_image_has_changed(self, newimage):
+        im1 = tensor2pil(newimage)
+        im2 = tensor2pil(self.last_images[0])
+        return im1.tobytes() != im2.tobytes()
 
     def crop_ip_inpaint(self,
                         model=None,
@@ -1640,16 +1641,13 @@ class CropIPInpaint:
                         ):
         rendered_images = None
         cropped_images = None
+        output_images = None
         samples = None
 
         images_has_changed = True if self.last_images is None else not torch.equal(
             images, self.last_images)
         newcrop = (crop_y, crop_x, crop_w, crop_h)
         crop_has_changed = newcrop != self.last_crop
-
-        # cstr(f"has images changed? {images_has_changed}").msg.print()
-        # cstr(
-        #     f"has crop changed? {crop_has_changed} -- old {str(self.last_crop)} -- new{str(newcrop)}").msg.print()
 
         self.last_images = images
         self.last_crop = newcrop
@@ -1699,8 +1697,6 @@ class CropIPInpaint:
                     mask = blur_transform(mask.unsqueeze(0))
                 else:
                     mask = mask.unsqueeze(0)
-        # else:
-        #     self.last_image = None
 
         if output_stage != 'Crop':
             conditioning_positive = CLIPTextEncodeSDXL().encode(
@@ -1726,22 +1722,76 @@ class CropIPInpaint:
                 text_l=text_negative,
             )
 
-            latent_t = self.vae_encode(vae, torch.stack(cropped_images, dim=0))
+            cropped_images_batch = torch.stack(cropped_images, dim=0)
+            latent_t = self.vae_encode(vae, cropped_images_batch)
             latent = {"samples": latent_t}
             latent_masked = self.set_latent_noise_mask(
                 latent, mask) if mask is not None else latent.copy()
 
             samples = latent
 
-            if denoise > 0 and image != '' and mask is not None:
-                samples = KSampler().sample(model, seed, steps, cfg, sampler_name, scheduler, positive=conditioning_positive[0],
-                                            negative=conditioning_negative[0], latent_image=latent_masked, denoise=denoise)
-                # samples = {"samples": torch.cat(
-                #     (ksamples[0]["samples"], latent_t), dim=0)}
+            sampler_model = model
 
-            samples_to_use = samples["samples"] if isinstance(
-                samples, dict) else samples[0]["samples"]
-            rendered_images = vae.decode(samples_to_use)
+            if use_ip_adapter and opt_ipadapter is not None and opt_clip_vision is not None:
+                ip_image = opt_ip_image if opt_ip_image is not None else cropped_images_batch
+                ip_adapter = IPAdapterApply()
+                (sampler_model, _, _) = ip_adapter.apply_ipadapter(
+                    ipadapter=opt_ipadapter,
+                    model=sampler_model,
+                    weight=ip_weight,
+                    clip_vision=opt_clip_vision,
+                    image=ip_image,
+                    weight_type=ip_weight_type,
+                    noise=ip_noise
+                )
+
+            if denoise > 0 and image != '' and mask is not None:
+                samples = KSampler().sample(sampler_model, seed, steps, cfg, sampler_name, scheduler, positive=conditioning_positive[0],
+                                            negative=conditioning_negative[0], latent_image=latent_masked, denoise=denoise)
+
+            samples_to_use = samples if isinstance(
+                samples, dict) else samples[0]
+            rendered_images = vae.decode(samples_to_use["samples"])
+
+            if output_stage == 'Final':
+                overlay_image = tensor2pil(rendered_images[0])
+
+                overlay_mask = None
+                if overlay_blur_amount > 0:
+                    overmask = Image.new("RGBA", overlay_image.size, 0)
+                    overmask.putalpha(
+                        Image.new("L", overlay_image.size, 0))
+
+                    halfblur = math.floor(overlay_blur_amount/2)
+                    origin = (overlay_blur_amount, overlay_blur_amount)
+                    corner = (overmask.size[0] - overlay_blur_amount,
+                              overmask.size[1] - overlay_blur_amount)
+
+                    draw = ImageDraw.Draw(overmask)
+                    draw.rectangle(
+                        [origin, corner], fill="#ffffffff")
+                    overmask = overmask.filter(ImageFilter.GaussianBlur(
+                        radius=halfblur))
+
+                    overlay_mask = Image.new("RGBA", overlay_image.size, 0)
+                    overlay_mask.putalpha(overmask.getchannel("R"))
+
+                base_images = torch.unbind(images, dim=0)
+                processed_images = []
+
+                for tensor in base_images:
+                    img = tensor2pil(tensor)
+                    if overlay_mask is None:
+                        img.paste(overlay_image, (crop_x, crop_y))
+                    else:
+                        img.paste(overlay_image,
+                                  (crop_x, crop_y), overlay_mask)
+
+                    processed_tensor = pil2tensor(img)
+                    processed_images.append(processed_tensor)
+
+                output_images = torch.stack(
+                    [tensor.squeeze() for tensor in processed_images])
 
         return {
             "ui":
@@ -1749,12 +1799,23 @@ class CropIPInpaint:
                 "images": clipspace_results if len(clipspace_results) > 0 else crop_save
             },
             "result": (
-                images if output_stage == 'Final' else None,
-                rendered_images if output_stage != 'Crop' else None,
+                None,
+                None,
                 cropped_images,
-                samples_to_use if output_stage != 'Crop' else None,
+                None,
             )
-        }
+        } if output_stage == 'Crop' else (  # {
+            # "ui":
+            # {
+            #     "images": clipspace_results if len(clipspace_results) > 0 else crop_save
+            # },
+            # "result": (
+                output_images if output_stage == 'Final' else None,
+                rendered_images,
+                cropped_images,
+                samples_to_use,
+        )
+        # }
 
     @classmethod
     def IS_CHANGED(self,
@@ -1787,12 +1848,17 @@ class CropIPInpaint:
                    opt_ip_image=None,
                    prompt=None,
                    extra_pnginfo=None):
-        cstr(f"CropIPInpaint IS_CHANGED? {str(image)}").msg.print()
-        # if self.last_image is None:
-        #     return 0
+
+        if self.last_images is None:
+            cstr(f"CropIPInpaint IS_CHANGED? TRUE: self.last_images is None").msg.print()
+            return float("nan")
 
         image_path = folder_paths.get_annotated_filepath(image)
-        # self.last_image['fullpath'])
+        if self.last_image_has_changed(images):
+            cstr(f"CropIPInpaint IS_CHANGED? TRUE: last_image_has_changed").msg.print()
+            return float("nan")
+
+        cstr(f"CropIPInpaint IS_CHANGED? unsure, we'll see if the hash of the mask has been updated").msg.print()
         m = hashlib.sha256()
         with open(image_path, 'rb') as f:
             m.update(f.read())

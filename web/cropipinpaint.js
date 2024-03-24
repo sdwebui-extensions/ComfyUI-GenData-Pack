@@ -25,7 +25,22 @@ class CropIpInpaint {
         this.processingQueue = false;
         this.initializeComfyUIHooks();
 
-        const stagehide_crop = ["use_ip_adapter", "ip_weight", "ip_noise", "ip_weight_type", "steps", "cfg", "sampler_name", "scheduler", "denoise", "overlay_blur_amount", "seed", RANDOMIZE_BUTTON_LABEL, NEW_FIXED_RANDOM_BUTTON_LABEL];
+        const stagehide_crop = [
+            "use_ip_adapter", 
+            "ip_weight", 
+            "ip_noise", 
+            "ip_weight_type", 
+            "steps", 
+            "cfg", 
+            "sampler_name", 
+            "scheduler", 
+            "denoise", 
+            "blur_transition", 
+            "overlay_blur_amount", 
+            "seed", 
+            RANDOMIZE_BUTTON_LABEL, 
+            NEW_FIXED_RANDOM_BUTTON_LABEL
+        ];
         const always_hidden = ['image'];
         this.node.widgets.forEach(w => {
             w.visibleInStage = [];
@@ -269,30 +284,10 @@ class CropIpInpaint {
         });
 
         this.toggleOutputTarget('image_final', () => stage === 'Final');
-        this.toggleOutputTarget('image_render', () => stage === 'Final' || stage === 'Render');
-        this.toggleOutputTarget('latent_render', () => stage === 'Final' || stage === 'Render');
+        this.toggleOutputTarget('image_render', () => stage === 'Render');
+        this.toggleOutputTarget('latent_render', () => stage === 'Render');
+        this.toggleOutputTarget('image_crop', () => stage === 'Crop');
 
-        // const image_final = this.findOutput('image_final');
-        // if ((image_final?.links || []).length > 0) {
-        //     const graph = app.graph;
-        //     image_final.links.forEach(k => {
-        //         const graphlink = graph.links[k];
-        //         const targetnode = graph._nodes_by_id[graphlink.target_id];
-
-        //         targetnode.mode = stage === "Final" ? MODE_NORMAL : MODE_MUTED;
-        //     });
-        // }
-
-        // const image_render = this.findOutput('image_render');
-        // if ((image_render?.links || []).length > 0) {
-        //     const graph = app.graph;
-        //     image_render.links.forEach(k => {
-        //         const graphlink = graph.links[k];
-        //         const targetnode = graph._nodes_by_id[graphlink.target_id];
-
-        //         targetnode.mode = stage === "Final" || stage === "Render" ? MODE_NORMAL : MODE_MUTED;
-        //     });
-        // }
         app.graph.setDirtyCanvas(true, false); // fg, bg
     };
 }
