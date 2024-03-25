@@ -410,6 +410,45 @@ def pil2tensor(image):
     return torch.from_numpy(np.array(image).astype(np.float32) / 255.0).unsqueeze(0)
 
 
+def recombine(images, overlay_image, crop_x, crop_y, overlay_blur_amount):
+    overlay_mask = None
+    if overlay_blur_amount > 0:
+        overmask = Image.new("RGBA", overlay_image.size, 0)
+        overmask.putalpha(
+            Image.new("L", overlay_image.size, 0))
+
+        halfblur = math.floor(overlay_blur_amount/2)
+        origin = (overlay_blur_amount, overlay_blur_amount)
+        corner = (overmask.size[0] - overlay_blur_amount,
+                  overmask.size[1] - overlay_blur_amount)
+
+        draw = ImageDraw.Draw(overmask)
+        draw.rectangle(
+            [origin, corner], fill="#ffffffff")
+        overmask = overmask.filter(ImageFilter.GaussianBlur(
+            radius=halfblur))
+
+        overlay_mask = Image.new("RGBA", overlay_image.size, 0)
+        overlay_mask.putalpha(overmask.getchannel("R"))
+
+    base_images = torch.unbind(images, dim=0)
+    processed_images = []
+
+    for tensor in base_images:
+        img = tensor2pil(tensor)
+        if overlay_mask is None:
+            img.paste(overlay_image, (crop_x, crop_y))
+        else:
+            img.paste(overlay_image,
+                      (crop_x, crop_y), overlay_mask)
+
+        processed_tensor = pil2tensor(img)
+        processed_images.append(processed_tensor)
+
+    return torch.stack(
+        [tensor.squeeze() for tensor in processed_images])
+
+
 class GenData:
     def __init__(self, prompt=None):
         self.bundle = {
@@ -1482,8 +1521,8 @@ class CropIPInpaint:
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "LATENT")
-    RETURN_NAMES = ("image_final", "image_render",
+    RETURN_TYPES = ("OPT_RECOMBINE", "IMAGE", "IMAGE", "IMAGE", "LATENT")
+    RETURN_NAMES = ("OPT_RECOMBINE", "image_final", "image_render",
                     "image_crop", "latent_render")
     FUNCTION = "crop_ip_inpaint"
 
@@ -1644,6 +1683,8 @@ class CropIPInpaint:
         output_images = None
         samples = None
 
+        OPT_RECOMBINE = (images, vae, crop_x, crop_y, overlay_blur_amount)
+
         images_has_changed = True if self.last_images is None else not torch.equal(
             images, self.last_images)
         newcrop = (crop_y, crop_x, crop_w, crop_h)
@@ -1734,6 +1775,16 @@ class CropIPInpaint:
 
             if use_ip_adapter and opt_ipadapter is not None and opt_clip_vision is not None:
                 ip_image = opt_ip_image if opt_ip_image is not None else cropped_images_batch
+                if ip_image.shape[1] != ip_image.shape[2]:
+                    # source image isn't square, which IPAdapter requires
+                    side_length = min(ip_image.shape[1], ip_image.shape[2])
+                    start_y = (ip_image.shape[1] // 2) - (side_length // 2)
+                    end_y = start_y + side_length
+                    start_x = (ip_image.shape[2] // 2) - (side_length // 2)
+                    end_x = start_x + side_length
+
+                    ip_image = ip_image[:, start_y:end_y, start_x:end_x, :]
+
                 ip_adapter = IPAdapterApply()
                 (sampler_model, _, _) = ip_adapter.apply_ipadapter(
                     ipadapter=opt_ipadapter,
@@ -1756,42 +1807,8 @@ class CropIPInpaint:
             if output_stage == 'Final':
                 overlay_image = tensor2pil(rendered_images[0])
 
-                overlay_mask = None
-                if overlay_blur_amount > 0:
-                    overmask = Image.new("RGBA", overlay_image.size, 0)
-                    overmask.putalpha(
-                        Image.new("L", overlay_image.size, 0))
-
-                    halfblur = math.floor(overlay_blur_amount/2)
-                    origin = (overlay_blur_amount, overlay_blur_amount)
-                    corner = (overmask.size[0] - overlay_blur_amount,
-                              overmask.size[1] - overlay_blur_amount)
-
-                    draw = ImageDraw.Draw(overmask)
-                    draw.rectangle(
-                        [origin, corner], fill="#ffffffff")
-                    overmask = overmask.filter(ImageFilter.GaussianBlur(
-                        radius=halfblur))
-
-                    overlay_mask = Image.new("RGBA", overlay_image.size, 0)
-                    overlay_mask.putalpha(overmask.getchannel("R"))
-
-                base_images = torch.unbind(images, dim=0)
-                processed_images = []
-
-                for tensor in base_images:
-                    img = tensor2pil(tensor)
-                    if overlay_mask is None:
-                        img.paste(overlay_image, (crop_x, crop_y))
-                    else:
-                        img.paste(overlay_image,
-                                  (crop_x, crop_y), overlay_mask)
-
-                    processed_tensor = pil2tensor(img)
-                    processed_images.append(processed_tensor)
-
-                output_images = torch.stack(
-                    [tensor.squeeze() for tensor in processed_images])
+                output_images = recombine(
+                    images, overlay_image, crop_x, crop_y, overlay_blur_amount)
 
         return {
             "ui":
@@ -1799,23 +1816,19 @@ class CropIPInpaint:
                 "images": clipspace_results if len(clipspace_results) > 0 else crop_save
             },
             "result": (
+                OPT_RECOMBINE,
                 None,
                 None,
                 cropped_images,
                 None,
             )
-        } if output_stage == 'Crop' else (  # {
-            # "ui":
-            # {
-            #     "images": clipspace_results if len(clipspace_results) > 0 else crop_save
-            # },
-            # "result": (
+        } if output_stage == 'Crop' else (
+                OPT_RECOMBINE,
                 output_images if output_stage == 'Final' else None,
                 rendered_images,
                 cropped_images,
                 samples_to_use,
         )
-        # }
 
     @classmethod
     def IS_CHANGED(self,
@@ -1901,6 +1914,57 @@ class CropIPInpaint:
         return True
 
 
+class CropRecombine:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        input_dir = folder_paths.get_input_directory()
+        files = [f for f in os.listdir(input_dir) if os.path.isfile(
+            os.path.join(input_dir, f))]
+        return {
+            "required": {
+                "OPT_RECOMBINE": ("OPT_RECOMBINE", ),
+            },
+            "optional": {
+                "latent_render": ("LATENT", ),
+                "image_render": ("IMAGE", ),
+            },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "crop_recombine"
+
+    CATEGORY = "image"
+
+    def crop_recombine(self,
+                       OPT_RECOMBINE,
+                       latent_render=None,
+                       image_render=None,
+                       prompt=None,
+                       extra_pnginfo=None
+                       ):
+
+        (images, vae, crop_x, crop_y, overlay_blur_amount) = OPT_RECOMBINE
+
+        if latent_render is None and image_render is None:
+            cstr(
+                "Crop Recombine requires either a latent_render or image_render input").error.print()
+            raise Exception(
+                "Crop Recombine needs either a latent or an image of the cropped source")
+
+        overlay_image = tensor2pil(vae.decode(
+            latent_render["samples"])) if latent_render is not None else tensor2pil(image_render)
+
+        output_images = recombine(
+            images, overlay_image, crop_x, crop_y, overlay_blur_amount)
+
+        return (output_images,)
+
+
 NODE_CLASS_MAPPINGS = {
     "Parse GenData 👩‍💻": ParseGenData,
     "Provide GenData 👩‍💻": ProvideGendata,
@@ -1922,4 +1986,5 @@ NODE_CLASS_MAPPINGS = {
     "VAE to String 👩‍💻": VaeToString,
     # "Crop|IP|Inpaint 👩‍💻": CropIPInpaint,
     "Crop|IP|Inpaint|SDXL 👩‍💻": CropIPInpaint,
+    "Crop Recombine 👩‍💻": CropRecombine,
 }
